@@ -50,6 +50,8 @@ skills/.hub/
 ignored/
 .worktrees/
 environments/benchmarks/evals/
+.formalqualbench-runs/
+.formalqualbench-smoke/
 
 # Release script temp files
 .release_notes.md

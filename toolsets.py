@@ -74,6 +74,21 @@ TOOLSETS = {
         "includes": []
     },
 
+    "axle": {
+        "description": "AXLE Lean verification and metaprogramming tools",
+        "tools": [
+            "axle_environments",
+            "axle_check",
+            "axle_verify_proof",
+            "axle_extract_decls",
+            "axle_repair_proofs",
+            "axle_simplify_theorems",
+            "axle_normalize",
+            "axle_rename",
+        ],
+        "includes": []
+    },
+
     "autoformalize": {
         "description": "Minimal Gauss workflow for papers, source files, and browser-driven research",
         "tools": [],

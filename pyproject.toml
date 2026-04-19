@@ -5,13 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "gauss-agent"
 version = "0.2.2"
-description = "Gauss is a focused Lean autoformalization workspace with a managed Claude Code launcher."
+description = "Gauss is a focused Lean autoformalization workspace with managed Forge and Codex workflow backends."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Math Inc." }]
 license = { text = "MIT" }
 dependencies = [
   # Core
+  "axiom-axle>=1.2.0",
   "openai",
   "anthropic>=0.39.0",
   "python-dotenv",
@@ -94,6 +95,9 @@ include = ["agent", "tools", "tools.*", "gauss_cli", "gateway", "gateway.*", "cr
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
+    "core: marks the Lean/FormalQual/Forge core surface",
+    "optional: marks optional product surfaces that are excluded from the default test run",
+    "legacy: marks legacy or experimental surfaces that are excluded from the default test run",
     "integration: marks tests requiring external services (API keys, Modal, etc.)",
 ]
 addopts = "-m 'not integration' -n auto"

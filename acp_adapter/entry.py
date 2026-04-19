@@ -68,8 +68,13 @@ def main() -> None:
     if project_root not in sys.path:
         sys.path.insert(0, project_root)
 
-    import acp
-    from .server import GaussACPAgent
+    try:
+        import acp
+        from .server import GaussACPAgent
+    except ImportError as exc:
+        logger.error("ACP dependencies are not installed: %s", exc)
+        logger.error("Install them with: pip install -e '.[acp]'")
+        sys.exit(1)
 
     agent = GaussACPAgent()
     try:

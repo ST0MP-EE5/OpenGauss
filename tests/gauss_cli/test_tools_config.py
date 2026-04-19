@@ -39,6 +39,10 @@ def test_toolset_has_keys_for_file_requires_no_configuration():
     assert _toolset_has_keys("file") is True
 
 
+def test_toolset_has_keys_for_axle_requires_no_configuration():
+    assert _toolset_has_keys("axle") is True
+
+
 def test_save_platform_tools_preserves_mcp_server_names():
     """Ensure MCP server names are preserved when saving platform tools.
 

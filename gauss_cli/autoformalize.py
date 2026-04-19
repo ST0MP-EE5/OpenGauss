@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from gauss_cli.auth import resolve_codex_runtime_credentials
 from gauss_cli.config import get_env_value, get_gauss_home
 from gauss_cli.handoff import HandoffRequest, build_handoff_request
 from gauss_cli.project import (
@@ -46,9 +47,23 @@ CLAUDE_AUTH_ENV_KEYS = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_TOKEN", "ANTHROPIC
 CODEX_AUTH_ENV_KEYS = ("OPENAI_API_KEY",)
 DEFAULT_AUTOFORMALIZE_BACKEND = "claude-code"
 CODEX_AUTOFORMALIZE_BACKEND = "codex"
+AUTOFORMALIZE_CODEX_MODEL_ENV = "GAUSS_AUTOFORMALIZE_CODEX_MODEL"
+FORGE_AUTOFORMALIZE_BACKEND = "forge"
+FORGE_PROVIDER_ID = "codex"
+FORGE_MODEL = "gpt-5.4"
+FORGE_REASONING_EFFORT = "high"
+FORGE_MAX_REQUESTS_PER_TURN = 100
+FORGE_CONFIG_ENV = "FORGE_CONFIG"
+FORGE_BINARY_OVERRIDE_ENV = "FORGE_BIN"
+AUTOFORMALIZE_MCP_PROXY_ENV = "GAUSS_AUTOFORMALIZE_MCP_PROXY"
+AUTOFORMALIZE_MCP_COUNT_PATH_ENV = "GAUSS_AUTOFORMALIZE_MCP_COUNT_PATH"
+AUTOFORMALIZE_NONINTERACTIVE_ENV = "GAUSS_AUTOFORMALIZE_NONINTERACTIVE"
+FORGE_INSTRUCTIONS_TEMPLATE_ENV = "GAUSS_AUTOFORMALIZE_FORGE_INSTRUCTIONS_TEMPLATE"
+FORGE_STARTUP_TEMPLATE_ENV = "GAUSS_AUTOFORMALIZE_FORGE_STARTUP_TEMPLATE"
 _SUPPORTED_AUTOFORMALIZE_BACKENDS = (
     DEFAULT_AUTOFORMALIZE_BACKEND,
     CODEX_AUTOFORMALIZE_BACKEND,
+    FORGE_AUTOFORMALIZE_BACKEND,
 )
 _AUTOFORMALIZE_BACKEND_ALIASES = {
     "claude": DEFAULT_AUTOFORMALIZE_BACKEND,
@@ -56,6 +71,9 @@ _AUTOFORMALIZE_BACKEND_ALIASES = {
     "codex": CODEX_AUTOFORMALIZE_BACKEND,
     "codex-cli": CODEX_AUTOFORMALIZE_BACKEND,
     "openai-codex": CODEX_AUTOFORMALIZE_BACKEND,
+    "forge": FORGE_AUTOFORMALIZE_BACKEND,
+    "forge-cli": FORGE_AUTOFORMALIZE_BACKEND,
+    "forgecode": FORGE_AUTOFORMALIZE_BACKEND,
 }
 
 _WORKFLOW_ALIAS_MAP = {
@@ -573,6 +591,26 @@ def _require_executable(name: str, error_message: str, env: Mapping[str, str]) -
     return resolved
 
 
+def _resolve_forge_executable(env: Mapping[str, str]) -> str:
+    override = str(env.get(FORGE_BINARY_OVERRIDE_ENV, "") or "").strip()
+    if override:
+        candidate = Path(override).expanduser()
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate.resolve())
+
+    resolved = shutil.which("forge", path=env.get("PATH"))
+    if resolved:
+        return resolved
+
+    local_forge = Path.home() / ".local" / "bin" / "forge"
+    if local_forge.is_file() and os.access(local_forge, os.X_OK):
+        return str(local_forge.resolve())
+
+    raise AutoformalizePreflightError(
+        "Forge CLI not found. Install ForgeCode or set FORGE_BIN to the executable path."
+    )
+
+
 def _resolve_uv_runner(env: Mapping[str, str]) -> tuple[str, ...]:
     spec = _resolve_lean_lsp_mcp_spec(env)
     uvx = shutil.which("uvx", path=env.get("PATH"))
@@ -685,6 +723,21 @@ def _resolve_codex_api_key(
     if not value and include_persisted_env:
         value = str(get_env_value("OPENAI_API_KEY") or "").strip()
     return value
+
+
+def _resolve_codex_runtime_api_key(
+    env: Mapping[str, str],
+    *,
+    include_persisted_env: bool,
+) -> str:
+    value = _resolve_codex_api_key(env, include_persisted_env=include_persisted_env)
+    if value:
+        return value
+    try:
+        creds = resolve_codex_runtime_credentials()
+    except Exception:
+        return ""
+    return str(creds.get("api_key", "") or "").strip()
 
 
 def _has_local_claude_auth(real_home: Path) -> bool:
@@ -1486,6 +1539,15 @@ def _resolve_backend_runtime(
             include_persisted_env=include_persisted_env,
             shared_bundle=shared_bundle,
         )
+    if backend_name == FORGE_AUTOFORMALIZE_BACKEND:
+        return _build_forge_runtime(
+            auth_mode=auth_mode,
+            user_instruction=user_instruction,
+            workflow=workflow,
+            base_environment=base_environment,
+            include_persisted_env=include_persisted_env,
+            shared_bundle=shared_bundle,
+        )
     raise AutoformalizeConfigError(f"Unsupported autoformalize backend: {backend_name}")
 
 
@@ -1512,6 +1574,16 @@ def _resolve_managed_chat_runtime(
         )
     if backend_name == CODEX_AUTOFORMALIZE_BACKEND:
         return _build_codex_chat_runtime(
+            auth_mode=auth_mode,
+            user_instruction=user_instruction,
+            base_environment=base_environment,
+            include_persisted_env=include_persisted_env,
+            active_cwd=active_cwd,
+            managed_state_base=managed_state_base,
+            real_home=real_home,
+        )
+    if backend_name == FORGE_AUTOFORMALIZE_BACKEND:
+        return _build_forge_chat_runtime(
             auth_mode=auth_mode,
             user_instruction=user_instruction,
             base_environment=base_environment,
@@ -1589,7 +1661,7 @@ def _resolve_codex_auth_staging_plan(
     local_auth_payload = _load_local_codex_auth_payload(real_home, base_environment)
     has_local_auth = _codex_auth_payload_is_valid(local_auth_payload)
     has_local_api_key = _codex_auth_payload_has_api_key(local_auth_payload)
-    openai_api_key = _resolve_codex_api_key(
+    openai_api_key = _resolve_codex_runtime_api_key(
         base_environment,
         include_persisted_env=include_persisted_env,
     )
@@ -1627,6 +1699,41 @@ def _resolve_codex_auth_staging_plan(
     )
 
 
+def _resolve_forge_api_key(
+    *,
+    auth_mode: str,
+    real_home: Path,
+    base_environment: Mapping[str, str],
+    include_persisted_env: bool,
+) -> str:
+    direct = str(base_environment.get("CODEX_API_KEY", "") or "").strip()
+    if not direct:
+        direct = _resolve_codex_runtime_api_key(
+            base_environment,
+            include_persisted_env=include_persisted_env,
+        )
+    if direct:
+        return direct
+
+    local_payload = _load_local_codex_auth_payload(real_home, base_environment)
+    if _codex_auth_payload_has_api_key(local_payload):
+        return str(local_payload.get("OPENAI_API_KEY", "") or "").strip()
+    if _codex_auth_payload_is_valid(local_payload):
+        tokens = local_payload.get("tokens")
+        if isinstance(tokens, Mapping):
+            access_token = str(tokens.get("access_token", "") or "").strip()
+            if access_token:
+                return access_token
+
+    if auth_mode == "login":
+        return ""
+
+    raise AutoformalizePreflightError(
+        "Forge auth not found. Save OPENAI_API_KEY, configure Codex auth with "
+        f"`{Path(sys.argv[0]).name} model`, or set CODEX_API_KEY for the managed Forge session."
+    )
+
+
 def _build_claude_runtime(
     *,
     auth_mode: str,
@@ -1659,11 +1766,13 @@ def _build_claude_runtime(
     mcp_server = _managed_claude_mcp_server_payload(
         uv_runner=shared_bundle.uv_runner,
         lean_root=shared_bundle.lean_root,
+        env=base_environment,
     )
     _write_mcp_config(
         mcp_config_path=mcp_config_path,
         uv_runner=shared_bundle.uv_runner,
         lean_root=shared_bundle.lean_root,
+        env=base_environment,
     )
     plugin_root = _sync_prewarmed_claude_plugin(
         real_home=real_home,
@@ -1698,6 +1807,7 @@ def _build_claude_runtime(
         mcp_config_path=mcp_config_path,
         backend_config_path=backend_config_path,
         skills_root=skills_root,
+        base_environment=base_environment,
     )
 
     managed_context = ManagedContext(
@@ -1767,6 +1877,8 @@ def _managed_chat_backend_label(backend_name: str) -> str:
         return "Claude Code"
     if backend_name == CODEX_AUTOFORMALIZE_BACKEND:
         return "Codex"
+    if backend_name == FORGE_AUTOFORMALIZE_BACKEND:
+        return "Forge"
     return backend_name
 
 
@@ -1935,6 +2047,7 @@ def _build_codex_runtime(
         mcp_config_path=codex_config_path,
         backend_config_path=codex_config_path,
         skills_root=skills_root,
+        base_environment=base_environment,
     )
     _write_codex_instructions(
         instructions_path=instructions_path,
@@ -1953,6 +2066,7 @@ def _build_codex_runtime(
         instructions_path=instructions_path,
         uv_runner=shared_bundle.uv_runner,
         lean_root=shared_bundle.lean_root,
+        env=base_environment,
     )
 
     managed_context = ManagedContext(
@@ -1994,10 +2108,25 @@ def _build_codex_runtime(
         child_env["GAUSS_AUTOFORMALIZE_CONTEXT"] = str(startup_context_path)
     child_env["GAUSS_AUTOFORMALIZE_INSTRUCTIONS"] = str(instructions_path)
 
-    argv = [
-        codex_exe,
-        "--dangerously-bypass-approvals-and-sandbox",
-    ]
+    noninteractive = str(base_environment.get(AUTOFORMALIZE_NONINTERACTIVE_ENV, "") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    argv = [codex_exe]
+    if noninteractive:
+        argv.extend(
+            [
+                "exec",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "--skip-git-repo-check",
+                "--color",
+                "never",
+            ]
+        )
+    else:
+        argv.append("--dangerously-bypass-approvals-and-sandbox")
     startup_prompt = _build_startup_prompt(
         managed_context,
         workflow=workflow,
@@ -2124,6 +2253,237 @@ def _build_codex_chat_runtime(
         argv=argv,
         child_env=child_env,
         backend_name=CODEX_AUTOFORMALIZE_BACKEND,
+    )
+
+
+def _build_forge_runtime(
+    *,
+    auth_mode: str,
+    user_instruction: str,
+    workflow: ManagedWorkflowSpec,
+    base_environment: Mapping[str, str],
+    include_persisted_env: bool,
+    shared_bundle: SharedLeanBundle,
+) -> AutoformalizeBackendRuntime:
+    forge_exe = _resolve_forge_executable(base_environment)
+    real_home = shared_bundle.real_home
+    staged_api_key = _resolve_forge_api_key(
+        auth_mode=auth_mode,
+        real_home=real_home,
+        base_environment=base_environment,
+        include_persisted_env=include_persisted_env,
+    )
+
+    backend_home = shared_bundle.managed_root / "forge-home"
+    forge_config_root = backend_home / "forge-config"
+    skills_root = backend_home / ".agents" / "skills" / "lean4"
+    forge_config_path = forge_config_root / ".forge.toml"
+    mcp_config_path = forge_config_root / ".mcp.json"
+    instructions_path = forge_config_root / "gauss-autoformalize-instructions.md"
+    for path in (backend_home, forge_config_root, skills_root.parent):
+        path.mkdir(parents=True, exist_ok=True)
+
+    _stage_tree(
+        source=shared_bundle.skill_source,
+        destination=skills_root,
+        revision=shared_bundle.skill_revision,
+    )
+    _stage_forge_auth(
+        backend_home=backend_home,
+        api_key=staged_api_key,
+    )
+    _write_forge_config(config_path=forge_config_path)
+    _write_mcp_config(
+        mcp_config_path=mcp_config_path,
+        uv_runner=shared_bundle.uv_runner,
+        lean_root=shared_bundle.lean_root,
+        env=base_environment,
+    )
+
+    startup_context_path = _write_startup_context(
+        startup_dir=shared_bundle.startup_dir,
+        backend_name=shared_bundle.backend_name,
+        project_root=shared_bundle.project_root,
+        lean_root=shared_bundle.lean_root,
+        active_cwd=shared_bundle.active_cwd,
+        user_instruction=user_instruction,
+        workflow=workflow,
+        plugin_root=shared_bundle.plugin_source,
+        mcp_config_path=mcp_config_path,
+        backend_config_path=forge_config_path,
+        skills_root=skills_root,
+        base_environment=base_environment,
+    )
+    _write_forge_instructions(
+        instructions_path=instructions_path,
+        startup_context_path=startup_context_path,
+        project_root=shared_bundle.project_root,
+        lean_root=shared_bundle.lean_root,
+        active_cwd=shared_bundle.active_cwd,
+        plugin_root=shared_bundle.plugin_source,
+        skills_root=skills_root,
+        workflow=workflow,
+        base_environment=base_environment,
+    )
+
+    managed_context = ManagedContext(
+        backend_name=shared_bundle.backend_name,
+        managed_root=shared_bundle.managed_root,
+        project_root=shared_bundle.project_root,
+        lean_root=shared_bundle.lean_root,
+        backend_home=backend_home,
+        plugin_root=shared_bundle.plugin_source,
+        mcp_config_path=mcp_config_path,
+        startup_context_path=startup_context_path,
+        assets_root=shared_bundle.assets_root,
+        project_manifest_path=shared_bundle.project.manifest_path,
+        backend_config_path=forge_config_path,
+        skills_root=skills_root,
+        instructions_path=instructions_path,
+    )
+
+    child_env = dict(base_environment)
+    for key in ("OPENAI_API_KEY", "CODEX_API_KEY"):
+        child_env.pop(key, None)
+    child_env.update(
+        _base_child_env(
+            managed_context=managed_context,
+            real_home=real_home,
+        )
+    )
+    child_env.update(
+        {
+            "HOME": str(backend_home),
+            FORGE_CONFIG_ENV: str(forge_config_root),
+            "LEAN4_PLUGIN_ROOT": str(shared_bundle.plugin_source),
+            "LEAN4_SCRIPTS": str(shared_bundle.scripts_root),
+            "LEAN4_REFS": str(skills_root / "references"),
+            "GAUSS_AUTOFORMALIZE_SKILLS_ROOT": str(skills_root),
+            "GAUSS_AUTOFORMALIZE_INSTRUCTIONS": str(instructions_path),
+            "GAUSS_YOLO_MODE": "1",
+            "FORGE_TRACKER": "false",
+            "FORGE_LOG": "forge=warn",
+        }
+    )
+    if startup_context_path is not None:
+        child_env["GAUSS_AUTOFORMALIZE_CONTEXT"] = str(startup_context_path)
+    if staged_api_key:
+        child_env["OPENAI_API_KEY"] = staged_api_key
+        child_env["CODEX_API_KEY"] = staged_api_key
+
+    argv = [forge_exe, "-p"]
+    startup_prompt = _build_startup_prompt(
+        managed_context,
+        workflow=workflow,
+        user_instruction=user_instruction,
+    )
+    if startup_prompt:
+        argv.append(startup_prompt)
+
+    return AutoformalizeBackendRuntime(
+        argv=argv,
+        child_env=child_env,
+        managed_context=managed_context,
+    )
+
+
+def _build_forge_chat_runtime(
+    *,
+    auth_mode: str,
+    user_instruction: str,
+    base_environment: Mapping[str, str],
+    include_persisted_env: bool,
+    active_cwd: Path,
+    managed_state_base: Path,
+    real_home: Path,
+) -> ManagedChatRuntime:
+    forge_exe = _resolve_forge_executable(base_environment)
+    managed_root = _managed_chat_root(managed_state_base, FORGE_AUTOFORMALIZE_BACKEND)
+    backend_home = managed_root / "forge-home"
+    forge_config_root = backend_home / "forge-config"
+    forge_config_path = forge_config_root / ".forge.toml"
+    mcp_config_path = forge_config_root / ".mcp.json"
+    staged_skill_root = backend_home / ".agents" / "skills" / "lean4"
+    lean_assets = _prepare_managed_chat_lean_assets(
+        managed_state_base=managed_state_base,
+        env=base_environment,
+    )
+    for path in (backend_home, forge_config_root, staged_skill_root.parent):
+        path.mkdir(parents=True, exist_ok=True)
+    if lean_assets is not None:
+        _stage_tree(
+            source=lean_assets.skill_source,
+            destination=staged_skill_root,
+            revision=lean_assets.skill_revision,
+        )
+        _write_mcp_config(
+            mcp_config_path=mcp_config_path,
+            uv_runner=tuple(lean_assets.uv_runner) if hasattr(lean_assets, "uv_runner") else _resolve_uv_runner(base_environment),
+            lean_root=active_cwd,
+            env=base_environment,
+        )
+    else:
+        _write_mcp_config(
+            mcp_config_path=mcp_config_path,
+            uv_runner=_resolve_uv_runner(base_environment),
+            lean_root=active_cwd,
+            env=base_environment,
+        )
+    _write_forge_config(config_path=forge_config_path)
+    staged_api_key = _resolve_forge_api_key(
+        auth_mode=auth_mode,
+        real_home=real_home,
+        base_environment=base_environment,
+        include_persisted_env=include_persisted_env,
+    )
+    _stage_forge_auth(
+        backend_home=backend_home,
+        api_key=staged_api_key,
+    )
+    child_env = dict(base_environment)
+    for key in ("OPENAI_API_KEY", "CODEX_API_KEY"):
+        child_env.pop(key, None)
+    child_env.update(
+        {
+            "GAUSS_MANAGED_CHAT": "1",
+            "GAUSS_MANAGED_CHAT_BACKEND": FORGE_AUTOFORMALIZE_BACKEND,
+            "GAUSS_CHAT_CWD": str(active_cwd),
+            "GAUSS_MANAGED_STATE_DIR": str(managed_root),
+            "GAUSS_REAL_HOME": str(real_home),
+            "HOME": str(backend_home),
+            FORGE_CONFIG_ENV: str(forge_config_root),
+            "FORGE_TRACKER": "false",
+            "FORGE_LOG": "forge=warn",
+            "GAUSS_YOLO_MODE": "1",
+        }
+    )
+    if lean_assets is not None:
+        child_env.update(
+            {
+                "LEAN4_PLUGIN_ROOT": str(lean_assets.plugin_source),
+                "LEAN4_SCRIPTS": str(lean_assets.scripts_root),
+            }
+        )
+        child_env["LEAN4_REFS"] = str(staged_skill_root / "references")
+        child_env["GAUSS_AUTOFORMALIZE_SKILLS_ROOT"] = str(staged_skill_root)
+    if staged_api_key:
+        child_env["OPENAI_API_KEY"] = staged_api_key
+        child_env["CODEX_API_KEY"] = staged_api_key
+    argv = [
+        forge_exe,
+        "-C",
+        str(active_cwd),
+        "-p",
+        _build_managed_chat_prompt(
+            backend_name=FORGE_AUTOFORMALIZE_BACKEND,
+            active_cwd=active_cwd,
+            user_instruction=user_instruction,
+        ),
+    ]
+    return ManagedChatRuntime(
+        argv=argv,
+        child_env=child_env,
+        backend_name=FORGE_AUTOFORMALIZE_BACKEND,
     )
 
 
@@ -2352,20 +2712,54 @@ def _stage_codex_auth(
         destination.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
+def _stage_forge_auth(
+    *,
+    backend_home: Path,
+    api_key: str,
+) -> None:
+    env_path = backend_home / ".env"
+    if env_path.exists():
+        env_path.unlink()
+    if not api_key:
+        return
+    lines = [
+        f"OPENAI_API_KEY={api_key}",
+        f"CODEX_API_KEY={api_key}",
+    ]
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _effective_mcp_runner(
+    *,
+    uv_runner: Sequence[str],
+    env: Mapping[str, str] | None,
+) -> list[str]:
+    proxy = str((env or {}).get(AUTOFORMALIZE_MCP_PROXY_ENV, "") or "").strip()
+    if proxy:
+        return [proxy, *uv_runner]
+    return list(uv_runner)
+
+
 def _managed_claude_mcp_server_payload(
     *,
     uv_runner: Sequence[str],
     lean_root: Path,
+    env: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    if len(uv_runner) < 2:
+    runner = _effective_mcp_runner(uv_runner=uv_runner, env=env)
+    if len(runner) < 2:
         raise AutoformalizeStagingError("Invalid uv runner configuration for managed Lean MCP server.")
+    server_env = {
+        "LEAN_PROJECT_PATH": str(lean_root),
+    }
+    count_path = str((env or {}).get(AUTOFORMALIZE_MCP_COUNT_PATH_ENV, "") or "").strip()
+    if count_path:
+        server_env[AUTOFORMALIZE_MCP_COUNT_PATH_ENV] = count_path
     return {
         "type": "stdio",
-        "command": uv_runner[0],
-        "args": list(uv_runner[1:]),
-        "env": {
-            "LEAN_PROJECT_PATH": str(lean_root),
-        },
+        "command": runner[0],
+        "args": list(runner[1:]),
+        "env": server_env,
     }
 
 
@@ -2374,12 +2768,14 @@ def _write_mcp_config(
     mcp_config_path: Path,
     uv_runner: Sequence[str],
     lean_root: Path,
+    env: Mapping[str, str] | None = None,
 ) -> None:
     payload = {
         "mcpServers": {
             "lean-lsp": _managed_claude_mcp_server_payload(
                 uv_runner=uv_runner,
                 lean_root=lean_root,
+                env=env,
             )
         }
     }
@@ -2474,20 +2870,41 @@ def _write_codex_config(
     instructions_path: Path,
     uv_runner: Sequence[str],
     lean_root: Path,
+    env: Mapping[str, str] | None = None,
 ) -> None:
-    if len(uv_runner) < 2:
+    configured_model = str((env or {}).get(AUTOFORMALIZE_CODEX_MODEL_ENV, "") or "").strip()
+    runner = _effective_mcp_runner(uv_runner=uv_runner, env=env)
+    if len(runner) < 2:
         raise AutoformalizeStagingError("Invalid uv runner configuration for managed Lean MCP server.")
-    lines = [
-        f"model_instructions_file = {_toml_string(str(instructions_path))}",
-        "",
-        "[mcp_servers.lean-lsp]",
-        f"command = {_toml_string(uv_runner[0])}",
-        f"args = [{', '.join(_toml_string(arg) for arg in uv_runner[1:])}]",
-        "",
-        "[mcp_servers.lean-lsp.env]",
-        f"LEAN_PROJECT_PATH = {_toml_string(str(lean_root))}",
-        "",
-    ]
+    lines: list[str] = []
+    if configured_model:
+        lines.extend(
+            [
+                f"model = {_toml_string(configured_model)}",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            f"model_instructions_file = {_toml_string(str(instructions_path))}",
+            "",
+            "[mcp_servers.lean-lsp]",
+            f"command = {_toml_string(runner[0])}",
+            f"args = [{', '.join(_toml_string(arg) for arg in runner[1:])}]",
+            "",
+            "[mcp_servers.lean-lsp.env]",
+            f"LEAN_PROJECT_PATH = {_toml_string(str(lean_root))}",
+            "",
+        ]
+    )
+    count_path = str((env or {}).get(AUTOFORMALIZE_MCP_COUNT_PATH_ENV, "") or "").strip()
+    if count_path:
+        lines.extend(
+            [
+                f"{AUTOFORMALIZE_MCP_COUNT_PATH_ENV} = {_toml_string(count_path)}",
+                "",
+            ]
+        )
     config_path.write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -2551,6 +2968,96 @@ def _write_codex_instructions(
     instructions_path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def _optional_text_file(path_value: str | None) -> str:
+    candidate = str(path_value or "").strip()
+    if not candidate:
+        return ""
+    path = Path(candidate).expanduser()
+    if not path.is_file():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _write_forge_config(
+    *,
+    config_path: Path,
+) -> None:
+    lines = [
+        f"max_requests_per_turn = {FORGE_MAX_REQUESTS_PER_TURN}",
+        "tool_supported = true",
+        "",
+        "[session]",
+        f'provider_id = "{FORGE_PROVIDER_ID}"',
+        f'model_id = "{FORGE_MODEL}"',
+        "",
+        "[reasoning]",
+        f'effort = "{FORGE_REASONING_EFFORT}"',
+        "",
+    ]
+    config_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _write_forge_instructions(
+    *,
+    instructions_path: Path,
+    startup_context_path: Path | None,
+    project_root: Path,
+    lean_root: Path,
+    active_cwd: Path,
+    plugin_root: Path,
+    skills_root: Path,
+    workflow: ManagedWorkflowSpec | None,
+    base_environment: Mapping[str, str],
+) -> None:
+    skill_doc_path = skills_root / "SKILL.md"
+    workflow_doc_path = (
+        _managed_workflow_doc_path(plugin_root, workflow.workflow_kind)
+        if workflow is not None
+        else None
+    )
+    lines = [
+        "# Gauss Managed Forge Workflow Instructions",
+        "",
+        "You are running inside Forge as a managed OpenGauss backend.",
+        "",
+        f"- Project root: `{project_root}`",
+        f"- Lean root: `{lean_root}`",
+        f"- Active working directory: `{active_cwd}`",
+        f"- Lean4 skill root: `{skills_root}`",
+        f"- Lean4 plugin root: `{plugin_root}`",
+        f"- Lean4 skill entrypoint: `{skill_doc_path}`",
+    ]
+    if startup_context_path is not None:
+        lines.append(f"- Startup context: `{startup_context_path}`")
+    if workflow_doc_path is not None:
+        lines.append(f"- Managed Lean workflow guide: `{workflow_doc_path}`")
+    lines.extend(
+        [
+            "",
+            "## Session Contract",
+            "- Read the startup context first.",
+            "- Use the managed Lean MCP server for navigation, diagnostics, and theorem-state work.",
+            "- Treat `/lean4:*` labels from OpenGauss as workflow contracts, not shell commands.",
+            "- Work only inside the current Lean project and keep edits reproducible.",
+            "- If the task is blocked, explain the blocker directly instead of fabricating proof progress.",
+            "",
+        ]
+    )
+    template_text = _optional_text_file(base_environment.get(FORGE_INSTRUCTIONS_TEMPLATE_ENV))
+    if template_text:
+        lines.extend(
+            [
+                "## Benchmark-Specific Instructions",
+                template_text,
+                "",
+            ]
+        )
+    instructions_path.write_text("\n".join(lines), encoding="utf-8")
+
+
 def _write_startup_context(
     *,
     startup_dir: Path,
@@ -2564,6 +3071,7 @@ def _write_startup_context(
     mcp_config_path: Path,
     backend_config_path: Path | None = None,
     skills_root: Path | None = None,
+    base_environment: Mapping[str, str] | None = None,
 ) -> Path | None:
     stamp = time.strftime("%Y%m%d-%H%M%S")
     path = startup_dir / f"{stamp}-{workflow.workflow_kind}.md"
@@ -2604,6 +3112,15 @@ def _write_startup_context(
                 "## Codex Skill Notes",
                 "- In Codex, the `/lean4:*` workflow request is a skill-level workflow name, not a shell executable.",
                 "- Invoke `$lean4` explicitly before following this workflow.",
+                "",
+            ]
+        )
+    elif backend_name == FORGE_AUTOFORMALIZE_BACKEND:
+        lines.extend(
+            [
+                "## Forge Workflow Notes",
+                "- In Forge, the `/lean4:*` workflow request is a workflow contract from OpenGauss, not a shell executable.",
+                "- Use the managed Lean MCP server and the staged workflow guide before improvising.",
                 "",
             ]
         )
@@ -2666,6 +3183,16 @@ def _write_startup_context(
             "",
         ]
     )
+    if backend_name == FORGE_AUTOFORMALIZE_BACKEND:
+        template_text = _optional_text_file((base_environment or {}).get(FORGE_STARTUP_TEMPLATE_ENV))
+        if template_text:
+            lines.extend(
+                [
+                    "## Benchmark-Specific Context",
+                    template_text,
+                    "",
+                ]
+            )
     path.write_text("\n".join(lines), encoding="utf-8")
     return path
 
@@ -2694,6 +3221,26 @@ def _build_startup_prompt(
         if skill_doc_path is not None and skill_doc_path.is_file():
             prompt_parts.append(
                 f"The staged skill entrypoint is {shlex.quote(str(skill_doc_path))}."
+            )
+        workflow_doc_path = _managed_workflow_doc_path(
+            managed_context.plugin_root,
+            workflow.workflow_kind,
+        )
+        if workflow_doc_path is not None:
+            prompt_parts.append(
+                f"The matching workflow guide is {shlex.quote(str(workflow_doc_path))}."
+            )
+        return " ".join(prompt_parts)
+    if managed_context.backend_name == FORGE_AUTOFORMALIZE_BACKEND:
+        prompt_parts = [
+            "You are in a Gauss-managed Lean workflow session running through Forge.",
+            f"Read the startup context at {quoted_context} first.",
+            "Then follow the requested Lean workflow directly in the active project.",
+            "Important: `/lean4:*` labels from OpenGauss are workflow requests, not shell commands.",
+        ]
+        if managed_context.instructions_path is not None:
+            prompt_parts.append(
+                f"Read the backend instructions at {shlex.quote(str(managed_context.instructions_path))} before taking action."
             )
         workflow_doc_path = _managed_workflow_doc_path(
             managed_context.plugin_root,

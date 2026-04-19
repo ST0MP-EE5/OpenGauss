@@ -247,6 +247,19 @@ class TestBuildSkillsSystemPrompt:
         assert "Debug Python scripts" in result
         assert "available_skills" in result
 
+    def test_uses_frontmatter_name_instead_of_directory_name(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("GAUSS_HOME", str(tmp_path))
+        skills_dir = tmp_path / "skills" / "coding" / "dir-name"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "SKILL.md").write_text(
+            "---\nname: frontmatter-name\ndescription: Named from frontmatter\n---\n"
+        )
+
+        result = build_skills_system_prompt()
+
+        assert "frontmatter-name" in result
+        assert "dir-name" not in result
+
     def test_deduplicates_skills(self, monkeypatch, tmp_path):
         monkeypatch.setenv("GAUSS_HOME", str(tmp_path))
         cat_dir = tmp_path / "skills" / "tools"
@@ -461,6 +474,11 @@ class TestPromptBuilderConstants:
         assert "discord" in PLATFORM_HINTS
         assert "cron" in PLATFORM_HINTS
         assert "cli" in PLATFORM_HINTS
+
+    def test_telegram_hint_mentions_supported_markdown(self):
+        hint = PLATFORM_HINTS["telegram"]
+        assert "Standard markdown is automatically converted" in hint
+        assert "Supported:" in hint
 
 
 # =========================================================================

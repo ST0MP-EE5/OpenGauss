@@ -367,6 +367,7 @@ class TestInlineThinkBlockExtraction(unittest.TestCase):
         agent = MagicMock(spec=AIAgent)
         agent._build_assistant_message = AIAgent._build_assistant_message.__get__(agent)
         agent._extract_reasoning = AIAgent._extract_reasoning.__get__(agent)
+        agent._strip_think_blocks = AIAgent._strip_think_blocks.__get__(agent)
         agent.verbose_logging = False
         agent.reasoning_callback = None
         return agent
@@ -376,6 +377,7 @@ class TestInlineThinkBlockExtraction(unittest.TestCase):
         api_msg = self._build_msg("<think>Let me calculate 2+2=4.</think>The answer is 4.")
         result = agent._build_assistant_message(api_msg, "stop")
         self.assertEqual(result["reasoning"], "Let me calculate 2+2=4.")
+        self.assertEqual(result["content"], "The answer is 4.")
 
     def test_multiple_think_blocks_extracted(self):
         agent = self._make_agent()

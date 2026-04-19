@@ -140,6 +140,10 @@ DEFAULT_CONFIG = {
         "project": {
             "template_source": "",
         },
+        "lean_service": {
+            "provider": "local",
+            "environment": "",
+        },
     },
     "model": "anthropic/claude-opus-4.6",
     "toolsets": ["gauss-cli"],
@@ -378,7 +382,7 @@ DEFAULT_CONFIG = {
     },
 
     # Config schema version - bump this when adding new required fields
-    "_config_version": 9,
+    "_config_version": 10,
 }
 
 # =============================================================================
@@ -593,6 +597,37 @@ OPTIONAL_ENV_VARS = {
         "url": "https://github.com/settings/tokens",
         "password": True,
         "category": "tool",
+    },
+    "AXLE_API_KEY": {
+        "description": "AXLE API key for higher-rate Lean proof-service requests",
+        "prompt": "AXLE API key",
+        "url": "https://axle.axiommath.ai/app/console",
+        "password": True,
+        "category": "tool",
+    },
+    "AXLE_API_URL": {
+        "description": "AXLE API URL override",
+        "prompt": "AXLE API URL (leave empty for default)",
+        "url": None,
+        "password": False,
+        "category": "tool",
+        "advanced": True,
+    },
+    "AXLE_TIMEOUT_SECONDS": {
+        "description": "AXLE client-side retry window in seconds",
+        "prompt": "AXLE timeout seconds",
+        "url": None,
+        "password": False,
+        "category": "tool",
+        "advanced": True,
+    },
+    "AXLE_MAX_CONCURRENCY": {
+        "description": "Maximum concurrent AXLE requests per client",
+        "prompt": "AXLE max concurrency",
+        "url": None,
+        "password": False,
+        "category": "tool",
+        "advanced": True,
     },
 
     # ── Messaging platforms ──
@@ -1264,6 +1299,7 @@ def show_config():
         ("FIRECRAWL_API_KEY", "Firecrawl"),
         ("BROWSERBASE_API_KEY", "Browserbase"),
         ("FAL_KEY", "FAL"),
+        ("AXLE_API_KEY", "AXLE"),
     ]
     
     for env_key, name in keys:
@@ -1278,6 +1314,16 @@ def show_config():
     print(f"  Model:        {config.get('model', 'not set')}")
     print(f"  Max turns:    {config.get('agent', {}).get('max_turns', DEFAULT_CONFIG['agent']['max_turns'])}")
     print(f"  Toolsets:     {', '.join(config.get('toolsets', ['all']))}")
+
+    print()
+    print(color("◆ Lean Proof Service", Colors.CYAN, Colors.BOLD))
+    lean_service = config.get("gauss", {}).get("lean_service", {})
+    print(f"  Provider:     {lean_service.get('provider', 'local')}")
+    environment_name = lean_service.get("environment", "")
+    print(f"  Environment:  {environment_name or color('(not set)', Colors.DIM)}")
+    axle_url = get_env_value("AXLE_API_URL") or "https://axle.axiommath.ai"
+    print(f"  AXLE URL:     {axle_url}")
+    print(f"  AXLE key:     {'configured' if get_env_value('AXLE_API_KEY') else color('not configured', Colors.DIM)}")
     
     # Display
     print()

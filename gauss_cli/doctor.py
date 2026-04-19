@@ -107,6 +107,109 @@ def _check_gateway_service_linger(issues: list[str]) -> None:
         check_warn("Could not verify systemd linger", f"({linger_detail})")
 
 
+def _check_lean_proof_service(
+    issues: list[str],
+    *,
+    config: Mapping[str, Any] | None = None,
+    env: Mapping[str, str] | None = None,
+    active_cwd: str | Path | None = None,
+) -> None:
+    """Report AXLE-backed Lean proof-service configuration and connectivity."""
+    try:
+        from gauss_cli.config import load_config
+        from gauss_cli.lean_service import (
+            AxleProofService,
+            DEFAULT_AXLE_URL,
+            LeanProofServiceError,
+            axle_sdk_available,
+            get_lean_service_provider,
+            resolve_axle_environment,
+        )
+    except Exception as exc:
+        print()
+        print(color("◆ Lean Proof Service", Colors.CYAN, Colors.BOLD))
+        check_warn("Lean proof-service diagnostics unavailable", f"({exc})")
+        return
+
+    resolved_config = config if isinstance(config, Mapping) else load_config()
+    environment = dict(env or os.environ)
+    active_dir = Path(active_cwd or environment.get("TERMINAL_CWD") or os.getcwd()).expanduser().resolve()
+
+    print()
+    print(color("◆ Lean Proof Service", Colors.CYAN, Colors.BOLD))
+
+    try:
+        provider = get_lean_service_provider(resolved_config, cwd=active_dir)
+    except LeanProofServiceError as exc:
+        check_fail("Lean proof-service config", f"({exc})")
+        issues.append(f"Fix gauss.lean_service config: {exc}")
+        return
+
+    check_ok("Configured provider", f"({provider})")
+
+    sdk_installed = axle_sdk_available()
+    if sdk_installed:
+        check_ok("AXLE SDK", "(installed)")
+    elif provider == "axle":
+        check_fail("AXLE SDK", "(install axiom-axle>=1.2.0)")
+        issues.append("Install axiom-axle>=1.2.0 to use gauss.lean_service.provider=axle")
+    else:
+        check_warn("AXLE SDK", "(not installed)")
+
+    axle_url = (environment.get("AXLE_API_URL") or "").strip() or DEFAULT_AXLE_URL
+    if environment.get("AXLE_API_URL"):
+        check_ok("AXLE API URL", f"({axle_url})")
+    else:
+        check_ok("AXLE API URL", f"({axle_url} default)")
+
+    if environment.get("AXLE_API_KEY"):
+        check_ok("AXLE API key", "(configured)")
+    else:
+        check_warn("AXLE API key", "(optional - anonymous requests are rate limited)")
+
+    configured_environment = None
+    try:
+        configured_environment = resolve_axle_environment(
+            resolved_config,
+            cwd=active_dir,
+            require=False,
+        )
+    except LeanProofServiceError as exc:
+        check_fail("AXLE environment config", f"({exc})")
+        issues.append(f"Fix AXLE environment configuration: {exc}")
+        configured_environment = None
+
+    if configured_environment:
+        check_ok("AXLE environment", f"({configured_environment})")
+    elif provider == "axle":
+        check_warn("AXLE environment", "(not configured)")
+        issues.append(
+            "Set gauss.lean_service.environment or .gauss/project.yaml lean_service.environment for AXLE-backed workflows"
+        )
+    else:
+        check_info("AXLE environment not configured (optional)")
+
+    should_check_api = provider == "axle" or any(
+        environment.get(name)
+        for name in ("AXLE_API_URL", "AXLE_API_KEY")
+    )
+    if not should_check_api or not sdk_installed:
+        return
+
+    try:
+        status = AxleProofService().status(timeout_seconds=10)
+    except LeanProofServiceError as exc:
+        if provider == "axle":
+            check_fail("AXLE API", f"({exc})")
+            issues.append(f"Check AXLE connectivity: {exc}")
+        else:
+            check_warn("AXLE API", f"({exc})")
+        return
+
+    status_text = status.get("status", "healthy")
+    check_ok("AXLE API", f"({status_text})")
+
+
 def _check_managed_workflow_requirements(
     issues: list[str],
     *,
@@ -548,6 +651,7 @@ def run_doctor(args):
         check_info("~/.gauss/state.db not created yet (will be created on first session)")
 
     _check_gateway_service_linger(issues)
+    _check_lean_proof_service(issues)
     
     # =========================================================================
     # Check: External tools

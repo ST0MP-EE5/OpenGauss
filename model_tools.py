@@ -24,6 +24,7 @@ import json
 import asyncio
 import os
 import logging
+import threading
 from typing import Dict, Any, List, Optional, Tuple
 
 from tools.registry import registry
@@ -35,6 +36,30 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 # Async Bridging  (single source of truth -- used by registry.dispatch too)
 # =============================================================================
+
+_tool_loop = None
+_tool_loop_lock = threading.Lock()
+_worker_thread_local = threading.local()
+
+
+def _get_tool_loop():
+    """Return a long-lived event loop for async tool handlers."""
+    global _tool_loop
+    with _tool_loop_lock:
+        if _tool_loop is None or _tool_loop.is_closed():
+            _tool_loop = asyncio.new_event_loop()
+        return _tool_loop
+
+
+def _get_worker_loop():
+    """Return a persistent event loop for the current worker thread."""
+    loop = getattr(_worker_thread_local, "loop", None)
+    if loop is None or loop.is_closed():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        _worker_thread_local.loop = loop
+    return loop
+
 
 def _run_async(coro):
     """Run an async coroutine from a sync context.
@@ -59,7 +84,13 @@ def _run_async(coro):
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             future = pool.submit(asyncio.run, coro)
             return future.result(timeout=300)
-    return asyncio.run(coro)
+
+    if threading.current_thread() is not threading.main_thread():
+        worker_loop = _get_worker_loop()
+        return worker_loop.run_until_complete(coro)
+
+    tool_loop = _get_tool_loop()
+    return tool_loop.run_until_complete(coro)
 
 
 # =============================================================================
@@ -76,6 +107,7 @@ def _discover_tools():
         "tools.web_tools",
         "tools.file_tools",
         "tools.browser_tool",
+        "tools.axle_tool",
     ]
     import importlib
     for mod_name in _modules:

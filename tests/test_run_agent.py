@@ -229,6 +229,24 @@ class TestStripThinkBlocks:
         assert "line1" not in result
         assert "visible" in result
 
+    def test_unterminated_block_removed(self, agent):
+        text = "prefix\n<think>\nsecret reasoning\nmore reasoning"
+        result = agent._strip_think_blocks(text)
+        assert "secret reasoning" not in result
+        assert result.strip() == "prefix"
+
+    def test_thought_variant_removed(self, agent):
+        text = "<thought>internal trace</thought> visible"
+        result = agent._strip_think_blocks(text)
+        assert "internal trace" not in result
+        assert "visible" in result
+
+    def test_prose_mention_not_over_stripped(self, agent):
+        text = "The string <think> appears in this explanation."
+        result = agent._strip_think_blocks(text)
+        assert "The string" in result
+        assert "appears in this explanation." in result
+
 
 class TestExtractReasoning:
     def test_reasoning_field(self, agent):
@@ -676,6 +694,17 @@ class TestBuildAssistantMessage:
         msg = _mock_assistant_msg(content=None)
         result = agent._build_assistant_message(msg, "stop")
         assert result["content"] == ""
+
+    def test_inline_think_blocks_are_stripped_from_stored_content(self, agent):
+        msg = _mock_assistant_msg(content="<think>reasoning</think>Answer")
+        result = agent._build_assistant_message(msg, "stop")
+        assert result["content"] == "Answer"
+        assert result["reasoning"] == "reasoning"
+
+    def test_unterminated_think_block_is_stripped_from_stored_content(self, agent):
+        msg = _mock_assistant_msg(content="prefix\n<think>reasoning without close")
+        result = agent._build_assistant_message(msg, "stop")
+        assert result["content"] == "prefix"
 
     def test_tool_call_extra_content_preserved(self, agent):
         """Gemini thinking models attach extra_content with thought_signature

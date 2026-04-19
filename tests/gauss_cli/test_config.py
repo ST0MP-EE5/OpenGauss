@@ -61,6 +61,8 @@ class TestLoadConfigDefaults:
             config = load_config()
             assert config["model"] == DEFAULT_CONFIG["model"]
             assert config["agent"]["max_turns"] == DEFAULT_CONFIG["agent"]["max_turns"]
+            assert config["gauss"]["lean_service"]["provider"] == "local"
+            assert config["gauss"]["lean_service"]["environment"] == ""
             assert "max_turns" not in config
             assert "terminal" in config
             assert config["terminal"]["backend"] == "local"
@@ -103,10 +105,14 @@ class TestSaveAndLoadRoundtrip:
         with patch.dict(os.environ, {"GAUSS_HOME": str(tmp_path)}):
             config = load_config()
             config["terminal"]["timeout"] = 999
+            config["gauss"]["lean_service"]["provider"] = "axle"
+            config["gauss"]["lean_service"]["environment"] = "lean-4.28.0"
             save_config(config)
 
             reloaded = load_config()
             assert reloaded["terminal"]["timeout"] == 999
+            assert reloaded["gauss"]["lean_service"]["provider"] == "axle"
+            assert reloaded["gauss"]["lean_service"]["environment"] == "lean-4.28.0"
 
 
 class TestSaveEnvValueSecure:

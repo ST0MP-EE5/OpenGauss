@@ -15,6 +15,85 @@ PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+OPTIONAL_TEST_PREFIXES = (
+    "tests/acp",
+    "tests/gateway",
+)
+OPTIONAL_TEST_FILES = {
+    "tests/tools/test_transcription.py",
+    "tests/tools/test_transcription_tools.py",
+}
+LEGACY_TEST_FILES = {
+    "tests/gauss_cli/test_doctor.py",
+    "tests/gauss_cli/test_setup_openclaw_migration.py",
+    "tests/gauss_cli/test_update_check.py",
+    "tests/test_cli_status_bar.py",
+    "tests/test_model_tools.py",
+    "tests/tools/test_delegate.py",
+    "tests/tools/test_mcp_tool.py",
+}
+
+
+def _flag_enabled(name: str) -> bool:
+    value = str(os.getenv(name, "") or "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _relative_repo_path(path: object) -> str:
+    try:
+        resolved = Path(str(path)).resolve()
+    except Exception:
+        return ""
+    try:
+        return resolved.relative_to(PROJECT_ROOT).as_posix()
+    except ValueError:
+        return resolved.as_posix()
+
+
+def _test_surface(path: object) -> str | None:
+    relative = _relative_repo_path(path)
+    if not relative.startswith("tests/"):
+        return None
+    if any(relative == prefix or relative.startswith(f"{prefix}/") for prefix in OPTIONAL_TEST_PREFIXES):
+        return "optional"
+    if relative in OPTIONAL_TEST_FILES:
+        return "optional"
+    if relative in LEGACY_TEST_FILES:
+        return "legacy"
+    return "core"
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--run-optional",
+        action="store_true",
+        default=_flag_enabled("GAUSS_RUN_OPTIONAL_TESTS"),
+        help="Collect and run optional non-core test surfaces (ACP, gateway, voice/transcription).",
+    )
+    parser.addoption(
+        "--run-legacy",
+        action="store_true",
+        default=_flag_enabled("GAUSS_RUN_LEGACY_TESTS"),
+        help="Collect and run legacy or experimental non-core test surfaces.",
+    )
+
+
+def pytest_ignore_collect(collection_path, config):
+    surface = _test_surface(collection_path)
+    if surface == "optional" and not config.getoption("run_optional"):
+        return True
+    if surface == "legacy" and not config.getoption("run_legacy"):
+        return True
+    return False
+
+
+def pytest_collection_modifyitems(config, items):
+    for item in items:
+        surface = _test_surface(getattr(item, "path", item.fspath))
+        if surface is None:
+            continue
+        item.add_marker(getattr(pytest.mark, surface))
+
 
 @pytest.fixture(autouse=True)
 def _isolate_gauss_home(tmp_path, monkeypatch):
@@ -38,6 +117,31 @@ def _isolate_gauss_home(tmp_path, monkeypatch):
     monkeypatch.delenv("GAUSS_SESSION_CHAT_ID", raising=False)
     monkeypatch.delenv("GAUSS_SESSION_CHAT_NAME", raising=False)
     monkeypatch.delenv("GAUSS_GATEWAY_SESSION", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _clear_host_api_env(monkeypatch):
+    """Prevent host API keys and local auth state from leaking into tests."""
+    for key in (
+        "EXA_API_KEY",
+        "PARALLEL_API_KEY",
+        "FIRECRAWL_API_KEY",
+        "FIRECRAWL_API_URL",
+        "TAVILY_API_KEY",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "VOICE_TOOLS_OPENAI_KEY",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_TOKEN",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "GROQ_API_KEY",
+        "HF_TOKEN",
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "COPILOT_GITHUB_TOKEN",
+        "MINIMAX_API_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
 
 
 @pytest.fixture()
@@ -71,6 +175,7 @@ def mock_config():
 
 def _timeout_handler(signum, frame):
     raise TimeoutError("Test exceeded 30 second timeout")
+
 
 @pytest.fixture(autouse=True)
 def _ensure_current_event_loop(request):
@@ -106,10 +211,20 @@ def _ensure_current_event_loop(request):
 
 
 @pytest.fixture(autouse=True)
-def _enforce_test_timeout():
+def _enforce_test_timeout(request):
     """Kill any individual test that takes longer than 30 seconds."""
+    if sys.platform == "win32":
+        yield
+        return
+    timeout_seconds = 30
+    timeout_marker = request.node.get_closest_marker("timeout")
+    if timeout_marker is not None:
+        if timeout_marker.args:
+            timeout_seconds = int(timeout_marker.args[0])
+        elif "seconds" in timeout_marker.kwargs:
+            timeout_seconds = int(timeout_marker.kwargs["seconds"])
     old = signal.signal(signal.SIGALRM, _timeout_handler)
-    signal.alarm(30)
+    signal.alarm(timeout_seconds)
     yield
     signal.alarm(0)
     signal.signal(signal.SIGALRM, old)

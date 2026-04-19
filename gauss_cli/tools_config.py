@@ -79,6 +79,7 @@ CONFIGURABLE_TOOLSETS = [
     ("file",            "📁 File Operations",           "read, write, patch, search"),
     ("web",             "🔍 Web Search",                "web_search"),
     ("browser",         "🌐 Browser Automation",        "navigate, click, type, scroll"),
+    ("axle",            "🧠 AXLE Lean Engine",          "remote Lean proof checks and rewrites"),
 ]
 
 # Toolsets that are OFF by default for new installs.

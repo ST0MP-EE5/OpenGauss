@@ -3,6 +3,7 @@
 # Preferred install: pip install -e ".[all]"
 
 # Core dependencies
+axiom-axle>=1.2.0
 openai
 python-dotenv
 fire

@@ -127,9 +127,10 @@ def _codex_ack_message_response(text: str):
 
 
 class _FakeResponsesStream:
-    def __init__(self, *, final_response=None, final_error=None):
+    def __init__(self, *, final_response=None, final_error=None, events=None):
         self._final_response = final_response
         self._final_error = final_error
+        self._events = list(events or [])
 
     def __enter__(self):
         return self
@@ -138,7 +139,7 @@ class _FakeResponsesStream:
         return False
 
     def __iter__(self):
-        return iter(())
+        return iter(self._events)
 
     def get_final_response(self):
         if self._final_error is not None:
@@ -329,6 +330,143 @@ def test_run_codex_stream_fallback_parses_create_stream_events(monkeypatch):
     assert calls["create"] == 1
     assert create_stream.closed is True
     assert response.output[0].content[0].text == "streamed create ok"
+
+
+def test_run_codex_stream_fallback_rehydrates_output_from_create_events(monkeypatch):
+    agent = _build_agent(monkeypatch)
+    calls = {"stream": 0, "create": 0}
+    create_stream = _FakeCreateStream(
+        [
+            SimpleNamespace(
+                type="response.output_item.done",
+                model_dump=lambda: {
+                    "type": "response.output_item.done",
+                    "output_index": 0,
+                    "item": {
+                        "type": "message",
+                        "status": "completed",
+                        "phase": "final_answer",
+                        "content": [{"type": "output_text", "text": "create hydrated ok"}],
+                    },
+                },
+            ),
+            SimpleNamespace(
+                type="response.completed",
+                response=SimpleNamespace(
+                    output=[],
+                    output_text="",
+                    usage=SimpleNamespace(input_tokens=5, output_tokens=3, total_tokens=8),
+                    status="completed",
+                    model="gpt-5-codex",
+                ),
+            ),
+        ]
+    )
+
+    def _fake_stream(**kwargs):
+        calls["stream"] += 1
+        return _FakeResponsesStream(
+            final_error=RuntimeError("Didn't receive a `response.completed` event.")
+        )
+
+    def _fake_create(**kwargs):
+        calls["create"] += 1
+        assert kwargs.get("stream") is True
+        return create_stream
+
+    agent.client = SimpleNamespace(
+        responses=SimpleNamespace(
+            stream=_fake_stream,
+            create=_fake_create,
+        )
+    )
+
+    response = agent._run_codex_stream(_codex_request_kwargs())
+    assert calls["stream"] == 2
+    assert calls["create"] == 1
+    assert create_stream.closed is True
+    assert response.output[0].content[0].text == "create hydrated ok"
+
+
+def test_run_codex_stream_rehydrates_output_from_stream_events(monkeypatch):
+    agent = _build_agent(monkeypatch)
+    stream = _FakeResponsesStream(
+        final_response=SimpleNamespace(
+            output=[],
+            output_text="",
+            usage=SimpleNamespace(input_tokens=5, output_tokens=3, total_tokens=8),
+            status="completed",
+            model="gpt-5-codex",
+        ),
+        events=[
+            SimpleNamespace(
+                type="response.output_item.done",
+                model_dump=lambda: {
+                    "type": "response.output_item.done",
+                    "output_index": 0,
+                    "item": {
+                        "type": "message",
+                        "status": "completed",
+                        "phase": "final_answer",
+                        "content": [{"type": "output_text", "text": "stream hydrated ok"}],
+                    },
+                },
+            ),
+        ],
+    )
+
+    agent.client = SimpleNamespace(
+        responses=SimpleNamespace(
+            stream=lambda **kwargs: stream,
+            create=lambda **kwargs: _codex_message_response("fallback"),
+        )
+    )
+
+    response = agent._run_codex_stream(_codex_request_kwargs())
+    assert response.output[0].content[0].text == "stream hydrated ok"
+    assert response.output_text == "stream hydrated ok"
+
+
+def test_run_codex_stream_rehydrates_function_call_from_stream_events(monkeypatch):
+    agent = _build_agent(monkeypatch)
+    stream = _FakeResponsesStream(
+        final_response=SimpleNamespace(
+            output=[],
+            output_text="",
+            usage=SimpleNamespace(input_tokens=12, output_tokens=4, total_tokens=16),
+            status="completed",
+            model="gpt-5-codex",
+        ),
+        events=[
+            SimpleNamespace(
+                type="response.output_item.done",
+                model_dump=lambda: {
+                    "type": "response.output_item.done",
+                    "output_index": 0,
+                    "item": {
+                        "type": "function_call",
+                        "status": "completed",
+                        "id": "fc_1",
+                        "call_id": "call_1",
+                        "name": "terminal",
+                        "arguments": "{}",
+                    },
+                },
+            ),
+        ],
+    )
+
+    agent.client = SimpleNamespace(
+        responses=SimpleNamespace(
+            stream=lambda **kwargs: stream,
+            create=lambda **kwargs: _codex_message_response("fallback"),
+        )
+    )
+
+    response = agent._run_codex_stream(_codex_request_kwargs())
+    assert response.output[0].type == "function_call"
+    assert response.output[0].name == "terminal"
+    assert response.output[0].call_id == "call_1"
 
 
 def test_run_conversation_codex_plain_text(monkeypatch):
@@ -540,7 +678,7 @@ def test_preflight_codex_api_kwargs_rejects_unsupported_request_fields(monkeypat
         agent._preflight_codex_api_kwargs(kwargs)
 
 
-def test_preflight_codex_api_kwargs_allows_reasoning_and_temperature(monkeypatch):
+def test_preflight_codex_api_kwargs_strips_unsupported_streaming_params(monkeypatch):
     agent = _build_agent(monkeypatch)
     kwargs = _codex_request_kwargs()
     kwargs["reasoning"] = {"effort": "high", "summary": "auto"}
@@ -551,8 +689,8 @@ def test_preflight_codex_api_kwargs_allows_reasoning_and_temperature(monkeypatch
     result = agent._preflight_codex_api_kwargs(kwargs)
     assert result["reasoning"] == {"effort": "high", "summary": "auto"}
     assert result["include"] == ["reasoning.encrypted_content"]
-    assert result["temperature"] == 0.7
-    assert result["max_output_tokens"] == 4096
+    assert "temperature" not in result
+    assert "max_output_tokens" not in result
 
 
 def test_run_conversation_codex_replay_payload_keeps_call_id(monkeypatch):

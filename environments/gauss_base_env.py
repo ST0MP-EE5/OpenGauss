@@ -61,6 +61,7 @@ from atroposlib.envs.server_handling.server_manager import (
 from atroposlib.type_definitions import Item
 
 from environments.agent_loop import AgentResult, GaussAgentLoop
+from environments.auth_bridge import apply_environment_auth, requested_environment_provider
 from environments.tool_context import ToolContext
 
 # Import gauss-agent toolset infrastructure
@@ -175,6 +176,13 @@ class GaussAgentEnvConfig(BaseEnvConfig):
         "chat.completions.create(). Used for OpenRouter provider preferences, "
         "transforms, and other provider-specific settings.",
     )
+    auth_provider: Optional[str] = Field(
+        default=None,
+        description="Optional Gauss provider id used only by the environments runtime "
+        "(for example: openai-codex, openrouter, anthropic, active). "
+        "This can also be overridden per subprocess via GAUSS_ENV_AUTH_PROVIDER "
+        "and does not change the normal Gauss CLI auth path.",
+    )
 
 
 class GaussAgentBaseEnv(BaseEnv):
@@ -209,7 +217,10 @@ class GaussAgentBaseEnv(BaseEnv):
         slurm=False,
         testing=False,
     ):
+        auth_provider = requested_environment_provider(config.auth_provider)
+        server_configs, resolved_auth = apply_environment_auth(server_configs, auth_provider)
         super().__init__(config, server_configs, slurm, testing)
+        self._resolved_environment_auth = resolved_auth
 
         # Set terminal environment variables so gauss tools pick them up.
         # These can all be overridden per-environment via config fields instead
@@ -222,6 +233,11 @@ class GaussAgentBaseEnv(BaseEnv):
             f"🖥️  Terminal: backend={config.terminal_backend}, "
             f"timeout={config.terminal_timeout}s, lifetime={config.terminal_lifetime}s"
         )
+        if resolved_auth:
+            print(
+                f"🔐 Env auth: provider={resolved_auth['provider']}, "
+                f"base_url={resolved_auth['base_url']}"
+            )
 
         # Resize the agent loop's thread pool for tool execution.
         # This must be large enough for the number of concurrent tasks

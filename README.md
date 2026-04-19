@@ -17,6 +17,46 @@ Open Gauss is a project-scoped Lean workflow orchestrator from Math, Inc. It giv
 
 Open Gauss handles project detection, managed backend setup, workflow spawning, swarm tracking, and recovery. The proving and formalization behavior still comes from `cameronfreer/lean4-skills`; Gauss exposes it through a Gauss-native CLI and project model.
 
+## Current supported surface
+
+The current core maintained surface is the Lean + FormalQualBench + Forge/Hyper path:
+
+- Lean project/runtime flow through the Gauss CLI
+- Managed backends: `forge` and `codex`
+- The FormalQualBench benchmark environment
+- The auth/runtime bridge needed for non-interactive benchmark runs
+- Hermes Hyper as an offline optimizer for the OpenGauss-managed Forge lane
+
+The rest of the repository remains available, but it is non-core for this branch and is excluded from the default verification contract:
+
+- ACP/editor integration
+- Gateway and messaging adapters
+- Voice/transcription flows
+- Website and landing-page content
+- Other benchmark, migration, and experimental surfaces
+
+## Core verification
+
+The default local verification target is the core Lean/FormalQual/Forge surface:
+
+```bash
+source .venv/bin/activate
+python -m pytest tests/ -q
+```
+
+Optional non-core suites are opt-in:
+
+```bash
+source .venv/bin/activate
+python -m pytest tests/ -q --run-optional
+python -m pytest tests/ -q --run-optional --run-legacy
+```
+
+You can also opt in with environment variables:
+
+- `GAUSS_RUN_OPTIONAL_TESTS=1`
+- `GAUSS_RUN_LEGACY_TESTS=1`
+
 Each lifted slash command spawns a managed backend child agent in the active project and forwards the same argument tail into the corresponding `lean4-skills` workflow command:
 
 - `/prove ...` -> `/lean4:prove ...`
@@ -180,9 +220,10 @@ Inside the interactive CLI, Gauss also rewrites common missing-slash forms like 
 
 ## Managed workflow prerequisites
 
-- `gauss.autoformalize.backend` defaults to `claude-code`
-- Built-in backends: `claude-code`, `codex`
-- `claude` or `codex` installed and authenticated for the backend you select
+- The current FormalQualBench benchmark path defaults to `forge`
+- Core managed backends for the current benchmark path: `forge`, `codex`
+- `claude-code` remains available, but it is non-core for this branch
+- `forge`, `codex`, or `claude` installed and authenticated for the backend you select
 - Claude auth can come from either:
   - the normal `claude auth login` flow / Claude credential files
   - a saved `ANTHROPIC_API_KEY` in `~/.gauss/.env`

@@ -81,6 +81,21 @@ class TestGetDefinitions:
         assert len(defs) == 1
         assert defs[0]["function"]["name"] == "available"
 
+    def test_schema_name_falls_back_to_registered_tool_name(self):
+        reg = ToolRegistry()
+        schema = {
+            "description": "missing explicit name",
+            "parameters": {"type": "object", "properties": {}},
+        }
+        reg.register(
+            name="fallback_name",
+            toolset="s",
+            schema=schema,
+            handler=_dummy_handler,
+        )
+        defs = reg.get_definitions({"fallback_name"})
+        assert defs[0]["function"]["name"] == "fallback_name"
+
 
 class TestUnknownToolDispatch:
     def test_returns_error_json(self):

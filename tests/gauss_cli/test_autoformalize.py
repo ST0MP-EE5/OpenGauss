@@ -406,10 +406,15 @@ def test_arxiv_search_script_resolves():
 def test_resolve_backend_name_accepts_claude_and_codex_aliases():
     assert autoformalize._resolve_backend_name(_config(backend="claude_code"), {}) == "claude-code"
     assert autoformalize._resolve_backend_name(_config(backend="openai_codex"), {}) == "codex"
+    assert autoformalize._resolve_backend_name(_config(backend="forge_cli"), {}) == "forge"
     assert autoformalize._resolve_backend_name(
         _config(),
         {"GAUSS_AUTOFORMALIZE_BACKEND": "openai-codex"},
     ) == "codex"
+    assert autoformalize._resolve_backend_name(
+        _config(),
+        {"GAUSS_AUTOFORMALIZE_BACKEND": "forgecode"},
+    ) == "forge"
 
 
 def test_resolve_backend_name_rejects_unknown_backend():
@@ -444,6 +449,7 @@ def test_build_claude_chat_runtime_stages_managed_home_and_plugin_context(monkey
     monkeypatch.setattr(autoformalize, "_require_executable", lambda name, _msg, _env: f"/usr/bin/{name}")
     monkeypatch.setattr(autoformalize, "_sync_prewarmed_claude_plugin", fake_sync_prewarmed_claude_plugin)
     monkeypatch.setattr(autoformalize, "_prepare_managed_chat_lean_assets", lambda **_kwargs: None)
+    monkeypatch.setattr(autoformalize, "_read_keychain_claude_credentials", lambda: None)
 
     runtime = autoformalize._build_claude_chat_runtime(
         auth_mode="auto",
@@ -942,6 +948,35 @@ def test_build_codex_runtime_stages_skill_mcp_and_api_key_auth(monkeypatch, tmp_
     assert "not a shell executable" in startup_content
 
 
+def test_build_codex_runtime_uses_exec_mode_when_noninteractive_requested(monkeypatch, tmp_path: Path):
+    shared_bundle = _shared_bundle(tmp_path, backend_name="codex")
+    workflow = _workflow("/autoformalize", "JordanCycleTheorem")
+    monkeypatch.setattr(autoformalize, "_require_executable", lambda name, _msg, _env: f"/usr/bin/{name}")
+
+    runtime = autoformalize._build_codex_runtime(
+        auth_mode="auto",
+        user_instruction=workflow.workflow_args,
+        workflow=workflow,
+        base_environment={
+            "HOME": str(shared_bundle.real_home),
+            "PATH": "/usr/bin",
+            "OPENAI_API_KEY": "sk-openai-test",
+            autoformalize.AUTOFORMALIZE_NONINTERACTIVE_ENV: "1",
+        },
+        include_persisted_env=False,
+        shared_bundle=shared_bundle,
+    )
+
+    assert runtime.argv[:6] == [
+        "/usr/bin/codex",
+        "exec",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--skip-git-repo-check",
+        "--color",
+        "never",
+    ]
+
+
 def test_build_codex_runtime_login_mode_allows_empty_managed_auth(monkeypatch, tmp_path: Path):
     shared_bundle = _shared_bundle(tmp_path, backend_name="codex")
     workflow = _workflow("/formalize")
@@ -998,6 +1033,110 @@ def test_build_codex_runtime_prefers_existing_local_auth_over_api_key(monkeypatc
     staged_payload = json.loads((runtime.managed_context.backend_home / ".codex" / "auth.json").read_text(encoding="utf-8"))
     assert staged_payload == local_payload
     assert "OPENAI_API_KEY" not in runtime.child_env
+
+
+def test_build_codex_runtime_uses_auth_store_fallback_when_env_missing(monkeypatch, tmp_path: Path):
+    shared_bundle = _shared_bundle(tmp_path, backend_name="codex")
+    workflow = _workflow("/formalize")
+    monkeypatch.setattr(autoformalize, "_require_executable", lambda name, _msg, _env: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        autoformalize,
+        "resolve_codex_runtime_credentials",
+        lambda: {"api_key": "sk-auth-store"},
+    )
+
+    runtime = autoformalize._build_codex_runtime(
+        auth_mode="auto",
+        user_instruction=workflow.workflow_args,
+        workflow=workflow,
+        base_environment={"HOME": str(shared_bundle.real_home), "PATH": "/usr/bin"},
+        include_persisted_env=False,
+        shared_bundle=shared_bundle,
+    )
+
+    auth_payload = json.loads(
+        (runtime.managed_context.backend_home / ".codex" / "auth.json").read_text(encoding="utf-8")
+    )
+    assert auth_payload == {
+        "auth_mode": "apikey",
+        "OPENAI_API_KEY": "sk-auth-store",
+    }
+    assert "OPENAI_API_KEY" not in runtime.child_env
+
+
+def test_build_forge_runtime_stages_managed_config_mcp_and_auth(monkeypatch, tmp_path: Path):
+    shared_bundle = _shared_bundle(tmp_path, backend_name="forge")
+    workflow = _workflow("/autoformalize", "JordanCycleTheorem")
+    instructions_template = tmp_path / "forge_instructions.md"
+    startup_template = tmp_path / "forge_startup.md"
+    instructions_template.write_text("Prefer theorem-local helper lemmas.", encoding="utf-8")
+    startup_template.write_text("Theorem hint: start from the Jordan action lemma.", encoding="utf-8")
+    monkeypatch.setattr(autoformalize, "_resolve_forge_executable", lambda _env: "/usr/bin/forge")
+
+    runtime = autoformalize._build_forge_runtime(
+        auth_mode="auto",
+        user_instruction=workflow.workflow_args,
+        workflow=workflow,
+        base_environment={
+            "HOME": str(shared_bundle.real_home),
+            "PATH": "/usr/bin",
+            "CODEX_API_KEY": "sk-forge-test",
+            autoformalize.FORGE_INSTRUCTIONS_TEMPLATE_ENV: str(instructions_template),
+            autoformalize.FORGE_STARTUP_TEMPLATE_ENV: str(startup_template),
+        },
+        include_persisted_env=False,
+        shared_bundle=shared_bundle,
+    )
+
+    managed_context = runtime.managed_context
+    expected_prompt = autoformalize._build_startup_prompt(
+        managed_context,
+        workflow=workflow,
+        user_instruction=workflow.workflow_args,
+    )
+
+    assert runtime.argv == ["/usr/bin/forge", "-p", expected_prompt]
+    assert runtime.child_env["HOME"] == str(managed_context.backend_home)
+    assert runtime.child_env[autoformalize.FORGE_CONFIG_ENV] == str(
+        managed_context.backend_home / "forge-config"
+    )
+    assert runtime.child_env["GAUSS_AUTOFORMALIZE_BACKEND"] == "forge"
+    assert runtime.child_env["GAUSS_PROJECT_ROOT"] == str(shared_bundle.project.root)
+    assert runtime.child_env["LEAN_PROJECT_PATH"] == str(shared_bundle.project.lean_root)
+    assert runtime.child_env["LEAN4_PLUGIN_ROOT"] == str(shared_bundle.plugin_source)
+    assert runtime.child_env["LEAN4_SCRIPTS"] == str(shared_bundle.scripts_root)
+    assert runtime.child_env["LEAN4_REFS"] == str(managed_context.skills_root / "references")
+    assert runtime.child_env["GAUSS_AUTOFORMALIZE_SKILLS_ROOT"] == str(managed_context.skills_root)
+    assert runtime.child_env["GAUSS_AUTOFORMALIZE_INSTRUCTIONS"] == str(managed_context.instructions_path)
+    assert runtime.child_env["GAUSS_AUTOFORMALIZE_CONTEXT"] == str(managed_context.startup_context_path)
+    assert runtime.child_env["OPENAI_API_KEY"] == "sk-forge-test"
+    assert runtime.child_env["CODEX_API_KEY"] == "sk-forge-test"
+    assert runtime.child_env["FORGE_TRACKER"] == "false"
+    assert runtime.child_env["FORGE_LOG"] == "forge=warn"
+
+    forge_config = managed_context.backend_config_path.read_text(encoding="utf-8")
+    assert 'provider_id = "codex"' in forge_config
+    assert 'model_id = "gpt-5.4"' in forge_config
+    assert 'effort = "high"' in forge_config
+
+    mcp_payload = json.loads(managed_context.mcp_config_path.read_text(encoding="utf-8"))
+    assert mcp_payload["mcpServers"]["lean-lsp"]["env"]["LEAN_PROJECT_PATH"] == str(
+        shared_bundle.project.lean_root
+    )
+
+    instructions_content = managed_context.instructions_path.read_text(encoding="utf-8")
+    assert "managed OpenGauss backend" in instructions_content
+    assert "Prefer theorem-local helper lemmas." in instructions_content
+    assert str(shared_bundle.plugin_source / "commands" / "autoformalize.md") in instructions_content
+
+    startup_content = managed_context.startup_context_path.read_text(encoding="utf-8")
+    assert workflow.backend_command in startup_content
+    assert "Theorem hint: start from the Jordan action lemma." in startup_content
+    assert "workflow contract from OpenGauss, not a shell executable" in startup_content
+
+    env_file = (managed_context.backend_home / ".env").read_text(encoding="utf-8")
+    assert "OPENAI_API_KEY=sk-forge-test" in env_file
+    assert "CODEX_API_KEY=sk-forge-test" in env_file
 
 
 def test_stage_claude_credentials_synthesizes_managed_key_from_api_key(tmp_path: Path):

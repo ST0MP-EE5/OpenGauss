@@ -7,10 +7,12 @@ conversation with correct formatting, truncation, and config behavior.
 
 import os
 import sys
+from contextlib import redirect_stdout
 from io import StringIO
 from unittest.mock import MagicMock, patch
 
 import pytest
+from rich.console import Console
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -122,8 +124,9 @@ class TestDisplayResumedHistory:
     def _capture_display(self, cli_obj):
         """Run _display_resumed_history and capture the Rich console output."""
         buf = StringIO()
-        cli_obj.console.file = buf
-        cli_obj._display_resumed_history()
+        cli_obj.console = Console(file=buf, force_terminal=False, color_system=None, width=100)
+        with redirect_stdout(buf):
+            cli_obj._display_resumed_history()
         return buf.getvalue()
 
     def test_simple_history_shows_user_and_assistant(self):
@@ -290,6 +293,35 @@ class TestDisplayResumedHistory:
         assert "Let me think step by step" not in output
         assert "The answer is 42" in output
 
+    def test_thought_tags_stripped(self):
+        cli = _make_cli()
+        cli.conversation_history = [
+            {"role": "user", "content": "Think about this"},
+            {
+                "role": "assistant",
+                "content": "<thought>hidden chain of thought</thought>\nVisible answer.",
+            },
+        ]
+        output = self._capture_display(cli)
+
+        assert "hidden chain of thought" not in output
+        assert "Visible answer." in output
+
+    def test_orphan_reasoning_close_tag_stripped(self):
+        cli = _make_cli()
+        cli.conversation_history = [
+            {"role": "user", "content": "Resume this"},
+            {
+                "role": "assistant",
+                "content": "Visible prefix</think> visible suffix",
+            },
+        ]
+        output = self._capture_display(cli)
+
+        assert "</think>" not in output
+        assert "Visible prefix" in output
+        assert "visible suffix" in output
+
     def test_pure_reasoning_message_skipped(self):
         """Assistant messages that are only reasoning should be skipped."""
         cli = _make_cli()
@@ -352,8 +384,8 @@ class TestPreloadResumedSession:
         cli._session_db = mock_db
 
         buf = StringIO()
-        cli.console.file = buf
-        result = cli._preload_resumed_session()
+        with redirect_stdout(buf):
+            result = cli._preload_resumed_session()
 
         assert result is False
         output = buf.getvalue()
@@ -367,8 +399,8 @@ class TestPreloadResumedSession:
         cli._session_db = mock_db
 
         buf = StringIO()
-        cli.console.file = buf
-        result = cli._preload_resumed_session()
+        with redirect_stdout(buf):
+            result = cli._preload_resumed_session()
 
         assert result is False
         output = buf.getvalue()
@@ -383,8 +415,8 @@ class TestPreloadResumedSession:
         cli._session_db = mock_db
 
         buf = StringIO()
-        cli.console.file = buf
-        result = cli._preload_resumed_session()
+        with redirect_stdout(buf):
+            result = cli._preload_resumed_session()
 
         assert result is True
         assert cli.conversation_history == messages
@@ -405,8 +437,8 @@ class TestPreloadResumedSession:
         cli._session_db = mock_db
 
         buf = StringIO()
-        cli.console.file = buf
-        cli._preload_resumed_session()
+        with redirect_stdout(buf):
+            cli._preload_resumed_session()
 
         # Should have executed UPDATE to clear ended_at
         mock_conn.execute.assert_called_once()
@@ -428,8 +460,8 @@ class TestPreloadResumedSession:
         cli._session_db = mock_db
 
         buf = StringIO()
-        cli.console.file = buf
-        cli._preload_resumed_session()
+        with redirect_stdout(buf):
+            cli._preload_resumed_session()
 
         output = buf.getvalue()
         assert "1 user message," in output

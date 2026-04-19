@@ -502,6 +502,7 @@ from rich.text import Text as _RichText
 import fire
 
 # Import the agent and tool systems
+from model_tools import get_tool_definitions, get_toolset_for_tool
 from run_agent import AIAgent
 
 # Extracted CLI modules (Phase 3)
@@ -2004,18 +2005,29 @@ class GaussCLI:
         MAX_ASST_LINES = 3           # max lines of assistant text
 
         def _strip_reasoning(text: str) -> str:
-            """Remove <REASONING_SCRATCHPAD>...</REASONING_SCRATCHPAD> blocks
-            from displayed text (reasoning model internal thoughts)."""
+            """Remove reasoning/thinking blocks from displayed recap text."""
             import re
-            cleaned = re.sub(
-                r"<REASONING_SCRATCHPAD>.*?</REASONING_SCRATCHPAD>\s*",
-                "", text, flags=re.DOTALL,
-            )
-            # Also strip unclosed reasoning tags at the end
-            cleaned = re.sub(
-                r"<REASONING_SCRATCHPAD>.*$",
-                "", cleaned, flags=re.DOTALL,
-            )
+
+            cleaned = text
+            for tag in ("REASONING_SCRATCHPAD", "think", "thinking", "reasoning", "thought"):
+                cleaned = re.sub(
+                    rf"<{tag}>.*?</{tag}>\s*",
+                    "",
+                    cleaned,
+                    flags=re.DOTALL | re.IGNORECASE,
+                )
+                cleaned = re.sub(
+                    rf"<{tag}>.*$",
+                    "",
+                    cleaned,
+                    flags=re.DOTALL | re.IGNORECASE,
+                )
+                cleaned = re.sub(
+                    rf"</{tag}>\s*",
+                    "",
+                    cleaned,
+                    flags=re.IGNORECASE,
+                )
             return cleaned.strip()
 
         # Collect displayable entries (skip system, tool-result messages)
@@ -4383,8 +4395,8 @@ class GaussCLI:
         elif cmd_lower == "/plan" or cmd_lower.startswith("/plan "):
             self._print_surface_notice(
                 "[bold yellow]`/plan` is no longer part of the default Gauss workflow.[/] "
-                "[dim]Use `/prove`, `/review`, `/checkpoint`, `/refactor`, `/golf`, `/autoprove`, `/formalize`, or `/autoformalize` for Lean work.[/]",
-                "`/plan` is no longer part of the default Gauss workflow. Use /prove, /review, /checkpoint, /refactor, /golf, /autoprove, /formalize, or /autoformalize for Lean work.",
+                "[dim]Use `/prove`, `/review`, `/checkpoint`, `/refactor`, `/golf`, `/draft`, `/autoprove`, `/formalize`, or `/autoformalize` for Lean work.[/]",
+                "`/plan` is no longer part of the default Gauss workflow. Use /prove, /review, /checkpoint, /refactor, /golf, /draft, /autoprove, /formalize, or /autoformalize for Lean work.",
             )
         elif cmd_lower == "/retry":
             retry_msg = self.retry_last()

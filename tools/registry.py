@@ -16,6 +16,7 @@ Import chain (circular-import safe):
 
 import json
 import logging
+import threading
 from typing import Any, Callable, Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,24 @@ class ToolRegistry:
     def __init__(self):
         self._tools: Dict[str, ToolEntry] = {}
         self._toolset_checks: Dict[str, Callable] = {}
+        # MCP refreshes and plugin discovery can mutate the registry while other
+        # threads are reading it for UI/tool resolution. Keep reads on stable
+        # snapshots and mutations serialized.
+        self._lock = threading.RLock()
+
+    def _snapshot_state(self) -> tuple[List[ToolEntry], Dict[str, Callable]]:
+        """Return a coherent snapshot of registry entries and toolset checks."""
+        with self._lock:
+            return list(self._tools.values()), dict(self._toolset_checks)
+
+    def _snapshot_entries(self) -> List[ToolEntry]:
+        """Return a stable snapshot of registered tool entries."""
+        return self._snapshot_state()[0]
+
+    def get_entry(self, name: str) -> Optional[ToolEntry]:
+        """Return a registered tool entry by name, or None."""
+        with self._lock:
+            return self._tools.get(name)
 
     # ------------------------------------------------------------------
     # Registration
@@ -66,19 +85,20 @@ class ToolRegistry:
         emoji: str = "",
     ):
         """Register a tool.  Called at module-import time by each tool file."""
-        self._tools[name] = ToolEntry(
-            name=name,
-            toolset=toolset,
-            schema=schema,
-            handler=handler,
-            check_fn=check_fn,
-            requires_env=requires_env or [],
-            is_async=is_async,
-            description=description or schema.get("description", ""),
-            emoji=emoji,
-        )
-        if check_fn and toolset not in self._toolset_checks:
-            self._toolset_checks[toolset] = check_fn
+        with self._lock:
+            self._tools[name] = ToolEntry(
+                name=name,
+                toolset=toolset,
+                schema=schema,
+                handler=handler,
+                check_fn=check_fn,
+                requires_env=requires_env or [],
+                is_async=is_async,
+                description=description or schema.get("description", ""),
+                emoji=emoji,
+            )
+            if check_fn and toolset not in self._toolset_checks:
+                self._toolset_checks[toolset] = check_fn
 
     # ------------------------------------------------------------------
     # Schema retrieval
@@ -91,21 +111,26 @@ class ToolRegistry:
         are included.
         """
         result = []
+        check_results: Dict[Callable, bool] = {}
+        entries_by_name = {entry.name: entry for entry in self._snapshot_entries()}
         for name in sorted(tool_names):
-            entry = self._tools.get(name)
+            entry = entries_by_name.get(name)
             if not entry:
                 continue
             if entry.check_fn:
-                try:
-                    if not entry.check_fn():
+                if entry.check_fn not in check_results:
+                    try:
+                        check_results[entry.check_fn] = bool(entry.check_fn())
+                    except Exception:
+                        check_results[entry.check_fn] = False
                         if not quiet:
-                            logger.debug("Tool %s unavailable (check failed)", name)
-                        continue
-                except Exception:
+                            logger.debug("Tool %s check raised; skipping", name)
+                if not check_results[entry.check_fn]:
                     if not quiet:
-                        logger.debug("Tool %s check raised; skipping", name)
+                        logger.debug("Tool %s unavailable (check failed)", name)
                     continue
-            result.append({"type": "function", "function": entry.schema})
+            schema_with_name = {**entry.schema, "name": entry.name}
+            result.append({"type": "function", "function": schema_with_name})
         return result
 
     # ------------------------------------------------------------------
@@ -119,7 +144,7 @@ class ToolRegistry:
         * All exceptions are caught and returned as ``{"error": "..."}``
           for consistent error format.
         """
-        entry = self._tools.get(name)
+        entry = self.get_entry(name)
         if not entry:
             return json.dumps({"error": f"Unknown tool: {name}"})
         try:
@@ -137,21 +162,21 @@ class ToolRegistry:
 
     def get_all_tool_names(self) -> List[str]:
         """Return sorted list of all registered tool names."""
-        return sorted(self._tools.keys())
+        return sorted(entry.name for entry in self._snapshot_entries())
 
     def get_toolset_for_tool(self, name: str) -> Optional[str]:
         """Return the toolset a tool belongs to, or None."""
-        entry = self._tools.get(name)
+        entry = self.get_entry(name)
         return entry.toolset if entry else None
 
     def get_emoji(self, name: str, default: str = "⚡") -> str:
         """Return the emoji for a tool, or *default* if unset."""
-        entry = self._tools.get(name)
+        entry = self.get_entry(name)
         return (entry.emoji if entry and entry.emoji else default)
 
     def get_tool_to_toolset_map(self) -> Dict[str, str]:
         """Return ``{tool_name: toolset_name}`` for every registered tool."""
-        return {name: e.toolset for name, e in self._tools.items()}
+        return {entry.name: entry.toolset for entry in self._snapshot_entries()}
 
     def is_toolset_available(self, toolset: str) -> bool:
         """Check if a toolset's requirements are met.
@@ -159,7 +184,8 @@ class ToolRegistry:
         Returns False (rather than crashing) when the check function raises
         an unexpected exception (e.g. network error, missing import, bad config).
         """
-        check = self._toolset_checks.get(toolset)
+        with self._lock:
+            check = self._toolset_checks.get(toolset)
         if not check:
             return True
         try:
@@ -170,13 +196,13 @@ class ToolRegistry:
 
     def check_toolset_requirements(self) -> Dict[str, bool]:
         """Return ``{toolset: available_bool}`` for every toolset."""
-        toolsets = set(e.toolset for e in self._tools.values())
+        toolsets = {entry.toolset for entry in self._snapshot_entries()}
         return {ts: self.is_toolset_available(ts) for ts in sorted(toolsets)}
 
     def get_available_toolsets(self) -> Dict[str, dict]:
         """Return toolset metadata for UI display."""
         toolsets: Dict[str, dict] = {}
-        for entry in self._tools.values():
+        for entry in self._snapshot_entries():
             ts = entry.toolset
             if ts not in toolsets:
                 toolsets[ts] = {
@@ -195,13 +221,16 @@ class ToolRegistry:
     def get_toolset_requirements(self) -> Dict[str, dict]:
         """Build a TOOLSET_REQUIREMENTS-compatible dict for backward compat."""
         result: Dict[str, dict] = {}
-        for entry in self._tools.values():
+        with self._lock:
+            entries = list(self._tools.values())
+            toolset_checks = dict(self._toolset_checks)
+        for entry in entries:
             ts = entry.toolset
             if ts not in result:
                 result[ts] = {
                     "name": ts,
                     "env_vars": [],
-                    "check_fn": self._toolset_checks.get(ts),
+                    "check_fn": toolset_checks.get(ts),
                     "setup_url": None,
                     "tools": [],
                 }
@@ -217,7 +246,7 @@ class ToolRegistry:
         available = []
         unavailable = []
         seen = set()
-        entries = list(self._tools.values())
+        entries = self._snapshot_entries()
         for entry in entries:
             ts = entry.toolset
             if ts in seen:

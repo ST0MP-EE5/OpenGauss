@@ -57,6 +57,7 @@ except Exception:
 
 AUTH_STORE_VERSION = 1
 AUTH_LOCK_TIMEOUT_SECONDS = 15.0
+AUTH_FILE_OVERRIDE_ENV = "GAUSS_AUTH_FILE_OVERRIDE"
 
 # Nous Portal defaults
 DEFAULT_NOUS_PORTAL_URL = "https://portal.nousresearch.com"
@@ -313,6 +314,9 @@ def _oauth_trace(event: str, *, sequence_id: Optional[str] = None, **fields: Any
 # =============================================================================
 
 def _auth_file_path() -> Path:
+    override = os.getenv(AUTH_FILE_OVERRIDE_ENV, "").strip()
+    if override:
+        return Path(override).expanduser()
     return get_gauss_home() / "auth.json"
 
 
@@ -764,6 +768,8 @@ def _refresh_codex_auth_tokens(
         except Exception:
             pass
         if code in {"invalid_grant", "invalid_token", "invalid_request"}:
+            relogin_required = True
+        if response.status_code in (401, 403) and not relogin_required:
             relogin_required = True
         raise AuthError(
             message,

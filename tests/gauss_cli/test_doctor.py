@@ -12,6 +12,7 @@ import pytest
 import gauss_cli.autoformalize as autoformalize_mod
 import gauss_cli.doctor as doctor
 import gauss_cli.gateway as gateway_cli
+import gauss_cli.lean_service as lean_service_mod
 from gauss_cli import doctor as doctor_mod
 from gauss_cli.doctor import _has_provider_env_config
 from gauss_cli.project import initialize_gauss_project
@@ -104,6 +105,39 @@ def test_check_gateway_service_linger_skips_when_service_not_installed(monkeypat
 
     out = capsys.readouterr().out
     assert out == ""
+    assert issues == []
+
+
+def test_check_lean_proof_service_reports_healthy_axle_setup(monkeypatch, tmp_path, capsys):
+    class FakeAxleProofService:
+        def status(self, *, timeout_seconds=60):
+            assert timeout_seconds == 10
+            return {"status": "healthy"}
+
+    monkeypatch.setattr(lean_service_mod, "axle_sdk_available", lambda: True)
+    monkeypatch.setattr(lean_service_mod, "AxleProofService", FakeAxleProofService)
+
+    issues: list[str] = []
+    doctor._check_lean_proof_service(
+        issues,
+        config={
+            "gauss": {
+                "lean_service": {
+                    "provider": "axle",
+                    "environment": "lean-4.28.0",
+                }
+            }
+        },
+        env={},
+        active_cwd=tmp_path,
+    )
+
+    output = capsys.readouterr().out
+    assert "Lean Proof Service" in output
+    assert "Configured provider" in output
+    assert "AXLE environment" in output
+    assert "lean-4.28.0" in output
+    assert "AXLE API" in output
     assert issues == []
 
 

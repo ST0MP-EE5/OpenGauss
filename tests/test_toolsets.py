@@ -30,6 +30,12 @@ class TestResolveToolset:
         tools = resolve_toolset("web")
         assert set(tools) == {"web_search"}
 
+    def test_axle_toolset(self):
+        tools = resolve_toolset("axle")
+        assert "axle_check" in tools
+        assert "axle_verify_proof" in tools
+        assert "axle_environments" in tools
+
     def test_composite_toolset(self):
         tools = resolve_toolset("autoformalize")
         assert "read_file" in tools

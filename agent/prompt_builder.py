@@ -123,7 +123,9 @@ PLATFORM_HINTS = {
     ),
     "telegram": (
         "You are on a text messaging communication platform, Telegram. "
-        "Please do not use markdown as it does not render. "
+        "Standard markdown is automatically converted to Telegram format. "
+        "Supported: **bold**, *italic*, ~~strikethrough~~, ||spoiler||, "
+        "`inline code`, ```code blocks```, [links](url), and ## headers. "
         "You can send media files natively: to deliver a file to the user, "
         "include MEDIA:/absolute/path/to/file in your response. Images "
         "(.png, .jpg, .webp) appear as photos, audio (.ogg) sends as voice "
@@ -283,7 +285,7 @@ def build_skills_system_prompt(
     # -> category "mlops/training", skill "axolotl"
     skills_by_category: dict[str, list[tuple[str, str]]] = {}
     for skill_file in skills_dir.rglob("SKILL.md"):
-        is_compatible, _, desc = _parse_skill_file(skill_file)
+        is_compatible, frontmatter, desc = _parse_skill_file(skill_file)
         if not is_compatible:
             continue
         # Skip skills whose conditional activation rules exclude them
@@ -298,11 +300,11 @@ def build_skills_system_prompt(
             #   → category = "mlops/training", skill_name = "axolotl"
             # e.g. parts = ("github", "github-auth", "SKILL.md")
             #   → category = "github", skill_name = "github-auth"
-            skill_name = parts[-2]
+            skill_name = str(frontmatter.get("name") or parts[-2]).strip() or parts[-2]
             category = "/".join(parts[:-2]) if len(parts) > 2 else parts[0]
         else:
             category = "general"
-            skill_name = skill_file.parent.name
+            skill_name = str(frontmatter.get("name") or skill_file.parent.name).strip() or skill_file.parent.name
         skills_by_category.setdefault(category, []).append((skill_name, desc))
 
     if not skills_by_category:

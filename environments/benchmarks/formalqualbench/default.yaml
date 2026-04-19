@@ -1,0 +1,17 @@
+env:
+  system_name: opengauss-forge-gpt54-direct
+  backend: forge
+  task_filter:
+    - JordanCycleTheorem
+    - PontryaginDuality
+    - BurnsidePrimeDegreeTheorem
+  task_timeout_seconds: 14400
+  formalqualbench_repo: https://github.com/math-inc/FormalQualBench.git
+  formalqualbench_ref: main
+  comparator_repo: https://github.com/leanprover/comparator.git
+  comparator_ref: master
+  landrun_path: landrun
+  auth_provider: openai-codex
+
+openai:
+  model_name: gpt-5.4

@@ -766,10 +766,11 @@ class AIAgent:
 
     def _has_content_after_think_block(self, content: str) -> bool:
         """
-        Check if content has actual text after any <think></think> blocks.
-        
+        Check if content has actual text after any reasoning/thinking blocks.
+
         This detects cases where the model only outputs reasoning but no actual
         response, which indicates an incomplete generation that should be retried.
+        Must stay in sync with _strip_think_blocks() tag variants.
         
         Args:
             content: The assistant message content to check
@@ -779,18 +780,51 @@ class AIAgent:
         """
         if not content:
             return False
-        
-        # Remove all <think>...</think> blocks (including nested ones, non-greedy)
-        cleaned = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
-        
+
+        cleaned = self._strip_think_blocks(content)
+
         # Check if there's any non-whitespace content remaining
         return bool(cleaned.strip())
     
     def _strip_think_blocks(self, content: str) -> str:
-        """Remove <think>...</think> blocks from content, returning only visible text."""
+        """Remove reasoning/thinking blocks from content, returning only visible text.
+
+        Handles four cases:
+          1. Closed tag pairs (<think>...</think>) from providers that emit
+             complete reasoning blocks.
+          2. Unterminated open tags at a block boundary (start of text or
+             after a newline), where everything from the tag to EOF should be
+             treated as reasoning.
+          3. Stray orphan open/close tags that slip through.
+          4. Tag variants: <think>, <thinking>, <reasoning>,
+             <REASONING_SCRATCHPAD>, and <thought>, case-insensitively.
+        """
         if not content:
             return ""
-        return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
+
+        content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(r'<thinking>.*?</thinking>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(r'<reasoning>.*?</reasoning>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(
+            r'<REASONING_SCRATCHPAD>.*?</REASONING_SCRATCHPAD>',
+            '',
+            content,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        content = re.sub(r'<thought>.*?</thought>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(
+            r'(?:^|\n)[ \t]*<(?:think|thinking|reasoning|thought|REASONING_SCRATCHPAD)\b[^>]*>.*$',
+            '',
+            content,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        content = re.sub(
+            r'</?(?:think|thinking|reasoning|thought|REASONING_SCRATCHPAD)>\s*',
+            '',
+            content,
+            flags=re.IGNORECASE,
+        )
+        return content
 
     def _looks_like_codex_intermediate_ack(
         self,
@@ -1894,13 +1928,10 @@ class AIAgent:
         if isinstance(include, list):
             normalized["include"] = include
 
-        # Pass through max_output_tokens and temperature
-        max_output_tokens = api_kwargs.get("max_output_tokens")
-        if isinstance(max_output_tokens, (int, float)) and max_output_tokens > 0:
-            normalized["max_output_tokens"] = int(max_output_tokens)
-        temperature = api_kwargs.get("temperature")
-        if isinstance(temperature, (int, float)):
-            normalized["temperature"] = float(temperature)
+        # ChatGPT Codex Responses currently rejects max_output_tokens and
+        # temperature on streaming calls. Keep accepting those keys so older
+        # callers do not crash, but strip them here before the request leaves
+        # the process. The backend uses its own defaults.
 
         # Pass through tool_choice, parallel_tool_calls, prompt_cache_key
         for passthrough_key in ("tool_choice", "parallel_tool_calls", "prompt_cache_key"):
@@ -1925,6 +1956,100 @@ class AIAgent:
             )
 
         return normalized
+
+    @staticmethod
+    def _responses_event_payload(event: Any) -> Dict[str, Any]:
+        """Return a dict payload for a Responses stream event when possible."""
+        if isinstance(event, dict):
+            return event
+
+        model_dump = getattr(event, "model_dump", None)
+        if callable(model_dump):
+            try:
+                payload = model_dump()
+            except Exception:
+                payload = None
+            if isinstance(payload, dict):
+                return payload
+
+        raw = getattr(event, "__dict__", None)
+        if isinstance(raw, dict):
+            return raw
+        return {}
+
+    @classmethod
+    def _responses_to_namespace(cls, value: Any) -> Any:
+        """Recursively convert dict/list payloads into attribute-style objects."""
+        if isinstance(value, dict):
+            return SimpleNamespace(**{k: cls._responses_to_namespace(v) for k, v in value.items()})
+        if isinstance(value, list):
+            return [cls._responses_to_namespace(v) for v in value]
+        return value
+
+    @staticmethod
+    def _extract_text_from_responses_output_item(item: Any) -> str:
+        """Extract text from a Responses message payload or object."""
+        if isinstance(item, dict):
+            if item.get("type") != "message":
+                return ""
+            content = item.get("content")
+        else:
+            if getattr(item, "type", None) != "message":
+                return ""
+            content = getattr(item, "content", None)
+
+        if not isinstance(content, list):
+            return ""
+
+        chunks: List[str] = []
+        for part in content:
+            if isinstance(part, dict):
+                part_type = part.get("type")
+                text = part.get("text")
+            else:
+                part_type = getattr(part, "type", None)
+                text = getattr(part, "text", None)
+            if part_type in {"output_text", "text"} and isinstance(text, str) and text:
+                chunks.append(text)
+        return "".join(chunks).strip()
+
+    def _hydrate_codex_stream_response(
+        self,
+        response: Any,
+        *,
+        output_items: Optional[Dict[int, Any]] = None,
+    ) -> Any:
+        """Patch empty streamed Responses objects with output items from events."""
+        output_items = output_items or {}
+        if not output_items:
+            return response
+
+        current_output = getattr(response, "output", None)
+        if isinstance(current_output, list) and current_output:
+            return response
+
+        ordered_payloads = [output_items[idx] for idx in sorted(output_items)]
+        hydrated_output = self._responses_to_namespace(ordered_payloads)
+
+        text_chunks = [
+            self._extract_text_from_responses_output_item(item)
+            for item in ordered_payloads
+        ]
+        hydrated_text = "\n".join(chunk for chunk in text_chunks if chunk).strip()
+
+        try:
+            response.output = hydrated_output
+            if hydrated_text and not getattr(response, "output_text", None):
+                response.output_text = hydrated_text
+            return response
+        except Exception:
+            payload = self._responses_event_payload(response)
+            if not payload:
+                payload = {}
+            payload["output"] = ordered_payloads
+            if hydrated_text and not payload.get("output_text"):
+                payload["output_text"] = hydrated_text
+            return self._responses_to_namespace(payload)
 
     def _extract_responses_message_text(self, item: Any) -> str:
         """Extract assistant text from a Responses message output item."""
@@ -2206,14 +2331,29 @@ class AIAgent:
 
     def _run_codex_stream(self, api_kwargs: dict, client: Any = None):
         """Execute one streaming Responses API request and return the final response."""
+        api_kwargs = self._preflight_codex_api_kwargs(api_kwargs, allow_stream=False)
         active_client = client or self._ensure_primary_openai_client(reason="codex_stream_direct")
         max_stream_retries = 1
         for attempt in range(max_stream_retries + 1):
             try:
+                output_items: Dict[int, Any] = {}
                 with active_client.responses.stream(**api_kwargs) as stream:
-                    for _ in stream:
-                        pass
-                    return stream.get_final_response()
+                    for event in stream:
+                        event_type = getattr(event, "type", None)
+                        if not event_type and isinstance(event, dict):
+                            event_type = event.get("type")
+                        if event_type != "response.output_item.done":
+                            continue
+                        payload = self._responses_event_payload(event)
+                        output_index = payload.get("output_index")
+                        item = payload.get("item")
+                        if isinstance(output_index, int) and item is not None:
+                            output_items[output_index] = item
+                    final_response = stream.get_final_response()
+                    return self._hydrate_codex_stream_response(
+                        final_response,
+                        output_items=output_items,
+                    )
             except RuntimeError as exc:
                 err_text = str(exc)
                 missing_completed = "response.completed" in err_text
@@ -2248,19 +2388,28 @@ class AIAgent:
             return stream_or_response
 
         terminal_response = None
+        output_items: Dict[int, Any] = {}
         try:
             for event in stream_or_response:
                 event_type = getattr(event, "type", None)
                 if not event_type and isinstance(event, dict):
                     event_type = event.get("type")
-                if event_type not in {"response.completed", "response.incomplete", "response.failed"}:
+                if event_type == "response.output_item.done":
+                    payload = self._responses_event_payload(event)
+                    output_index = payload.get("output_index")
+                    item = payload.get("item")
+                    if isinstance(output_index, int) and item is not None:
+                        output_items[output_index] = item
                     continue
-
-                terminal_response = getattr(event, "response", None)
-                if terminal_response is None and isinstance(event, dict):
-                    terminal_response = event.get("response")
-                if terminal_response is not None:
-                    return terminal_response
+                if event_type in {"response.completed", "response.incomplete", "response.failed"}:
+                    terminal_response = getattr(event, "response", None)
+                    if terminal_response is None and isinstance(event, dict):
+                        terminal_response = event.get("response")
+                    if terminal_response is not None:
+                        return self._hydrate_codex_stream_response(
+                            terminal_response,
+                            output_items=output_items,
+                        )
         finally:
             close_fn = getattr(stream_or_response, "close", None)
             if callable(close_fn):
@@ -2270,7 +2419,10 @@ class AIAgent:
                     pass
 
         if terminal_response is not None:
-            return terminal_response
+            return self._hydrate_codex_stream_response(
+                terminal_response,
+                output_items=output_items,
+            )
         raise RuntimeError("Responses create(stream=True) fallback did not emit a terminal response.")
 
     def _try_refresh_codex_client_credentials(self, *, force: bool = True) -> bool:
@@ -3008,9 +3160,13 @@ class AIAgent:
             except Exception:
                 pass
 
+        stored_content = assistant_message.content or ""
+        if stored_content:
+            stored_content = self._strip_think_blocks(stored_content).strip()
+
         msg = {
             "role": "assistant",
-            "content": assistant_message.content or "",
+            "content": stored_content,
             "reasoning": reasoning_text,
             "finish_reason": finish_reason,
         }
