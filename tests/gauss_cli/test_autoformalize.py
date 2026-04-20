@@ -397,10 +397,9 @@ def test_write_startup_context_includes_forwarded_arguments_and_arxiv(tmp_path: 
     assert "export.arxiv.org" in content
 
 
-def test_arxiv_search_script_resolves():
+def test_arxiv_search_script_is_absent_in_contracted_repo():
     result = autoformalize._arxiv_search_script()
-    assert result is not None
-    assert result.endswith("search_arxiv.py")
+    assert result is None
 
 
 def test_resolve_backend_name_accepts_claude_and_codex_aliases():

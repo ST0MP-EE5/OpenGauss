@@ -131,7 +131,7 @@ config = yaml.safe_load((gauss_home / "config.yaml").read_text(encoding="utf-8")
 assert config["display"]["skin"] == "mathinc"
 assert config["terminal"]["backend"] == "local"
 assert config["terminal"]["cwd"] == str(workspace_dir)
-assert config["gauss"]["autoformalize"]["backend"] == "claude-code"
+assert config["gauss"]["autoformalize"]["backend"] == "forge"
 assert config["gauss"]["autoformalize"]["auth_mode"] == "auto"
 assert config["agent"]["max_turns"] == 90
 assert config["model"]["provider"] == "custom"
@@ -183,7 +183,7 @@ grep -F 'OPENAI_BASE_URL="https://api.openai.com/v1"' "$GAUSS_HOME/.env" >/dev/n
 echo "==> Verifying launcher summary"
 SUMMARY_OUTPUT="$(gauss-launch-session --print-summary)"
 printf '%s\n' "$SUMMARY_OUTPUT"
-[[ "$SUMMARY_OUTPUT" == *"Managed backend: claude-code"* ]] || die "expected managed backend summary"
+[[ "$SUMMARY_OUTPUT" == *"Managed backend: forge"* ]] || die "expected managed backend summary"
 [[ "$SUMMARY_OUTPUT" == *"Main chat: ready."* ]] || die "expected ready main-chat summary"
 [[ "$SUMMARY_OUTPUT" == *"$WORKSPACE_DIR"* ]] || die "expected workspace path in launcher summary"
 [[ "$SUMMARY_OUTPUT" == *"/chat"* ]] || die "expected launcher summary to mention /chat"

@@ -3,9 +3,8 @@
 
 Historically this package eagerly imported nearly every tool module at import
 time. That meant a simple ``from tools.registry import registry`` also loaded
-and registered optional toolsets like RL, cron, image generation, and MoA,
-which in turn exposed them in the Gauss startup banner and pulled in heavy
-dependencies before the CLI had selected its actual tool surface.
+and registered unrelated optional surfaces before the CLI had selected its
+actual tool surface.
 
 Keep the public ``from tools import ...`` API, but only import a tool module
 when that specific attribute is requested.
@@ -51,11 +50,6 @@ _MODULE_EXPORTS = {
         "check_skills_requirements",
         "SKILLS_TOOL_DESCRIPTION",
     ),
-    "tools.skill_manager_tool": (
-        "skill_manage",
-        "check_skill_manage_requirements",
-        "SKILL_MANAGE_SCHEMA",
-    ),
     "tools.browser_tool": (
         "browser_navigate",
         "browser_snapshot",
@@ -73,29 +67,6 @@ _MODULE_EXPORTS = {
         "check_browser_requirements",
         "BROWSER_TOOL_SCHEMAS",
     ),
-    "tools.cronjob_tools": (
-        "cronjob",
-        "schedule_cronjob",
-        "list_cronjobs",
-        "remove_cronjob",
-        "check_cronjob_requirements",
-        "get_cronjob_tool_definitions",
-        "CRONJOB_SCHEMA",
-    ),
-    "tools.rl_training_tool": (
-        "rl_list_environments",
-        "rl_select_environment",
-        "rl_get_current_config",
-        "rl_edit_config",
-        "rl_start_training",
-        "rl_check_status",
-        "rl_stop_training",
-        "rl_get_results",
-        "rl_list_runs",
-        "rl_test_inference",
-        "check_rl_api_keys",
-        "get_missing_keys",
-    ),
     "tools.file_tools": (
         "read_file_tool",
         "write_file_tool",
@@ -103,10 +74,6 @@ _MODULE_EXPORTS = {
         "search_tool",
         "get_file_tools",
         "clear_file_ops_cache",
-    ),
-    "tools.tts_tool": (
-        "text_to_speech_tool",
-        "check_tts_requirements",
     ),
     "tools.todo_tool": (
         "todo_tool",

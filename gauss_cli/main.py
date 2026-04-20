@@ -12,9 +12,6 @@ Usage:
     gauss version              # Show version
     gauss update               # Update to latest version
     gauss uninstall            # Uninstall Gauss
-
-    gauss gateway start        # Legacy compatibility surface
-    gauss cron list            # Legacy compatibility surface
 """
 
 import argparse
@@ -486,199 +483,6 @@ def cmd_chat(args):
     except ValueError as e:
         print(f"Error: {e}")
         sys.exit(1)
-
-
-def cmd_gateway(args):
-    """Gateway management commands."""
-    from gauss_cli.gateway import gateway_command
-    gateway_command(args)
-
-
-def cmd_whatsapp(args):
-    """Set up WhatsApp: choose mode, configure, install bridge, pair via QR."""
-    import os
-    import subprocess
-    from pathlib import Path
-    from gauss_cli.config import get_env_value, save_env_value
-
-    print()
-    print("⚕ WhatsApp Setup")
-    print("=" * 50)
-
-    # ── Step 1: Choose mode ──────────────────────────────────────────────
-    current_mode = get_env_value("WHATSAPP_MODE") or ""
-    if not current_mode:
-        print()
-        print("How will you use WhatsApp with Gauss?")
-        print()
-        print("  1. Separate bot number (recommended)")
-        print("     People message the bot's number directly — cleanest experience.")
-        print("     Requires a second phone number with WhatsApp installed on a device.")
-        print()
-        print("  2. Personal number (self-chat)")
-        print("     You message yourself to talk to the agent.")
-        print("     Quick to set up, but the UX is less intuitive.")
-        print()
-        try:
-            choice = input("  Choose [1/2]: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\nSetup cancelled.")
-            return
-
-        if choice == "1":
-            save_env_value("WHATSAPP_MODE", "bot")
-            wa_mode = "bot"
-            print("  ✓ Mode: separate bot number")
-            print()
-            print("  ┌─────────────────────────────────────────────────┐")
-            print("  │  Getting a second number for the bot:           │")
-            print("  │                                                 │")
-            print("  │  Easiest: Install WhatsApp Business (free app)  │")
-            print("  │  on your phone with a second number:            │")
-            print("  │    • Dual-SIM: use your 2nd SIM slot            │")
-            print("  │    • Google Voice: free US number (voice.google) │")
-            print("  │    • Prepaid SIM: $3-10, verify once            │")
-            print("  │                                                 │")
-            print("  │  WhatsApp Business runs alongside your personal │")
-            print("  │  WhatsApp — no second phone needed.             │")
-            print("  └─────────────────────────────────────────────────┘")
-        else:
-            save_env_value("WHATSAPP_MODE", "self-chat")
-            wa_mode = "self-chat"
-            print("  ✓ Mode: personal number (self-chat)")
-    else:
-        wa_mode = current_mode
-        mode_label = "separate bot number" if wa_mode == "bot" else "personal number (self-chat)"
-        print(f"\n✓ Mode: {mode_label}")
-
-    # ── Step 2: Enable WhatsApp ──────────────────────────────────────────
-    print()
-    current = get_env_value("WHATSAPP_ENABLED")
-    if current and current.lower() == "true":
-        print("✓ WhatsApp is already enabled")
-    else:
-        save_env_value("WHATSAPP_ENABLED", "true")
-        print("✓ WhatsApp enabled")
-
-    # ── Step 3: Allowed users ────────────────────────────────────────────
-    current_users = get_env_value("WHATSAPP_ALLOWED_USERS") or ""
-    if current_users:
-        print(f"✓ Allowed users: {current_users}")
-        try:
-            response = input("\n  Update allowed users? [y/N] ").strip()
-        except (EOFError, KeyboardInterrupt):
-            response = "n"
-        if response.lower() in ("y", "yes"):
-            if wa_mode == "bot":
-                phone = input("  Phone numbers that can message the bot (comma-separated): ").strip()
-            else:
-                phone = input("  Your phone number (e.g. 15551234567): ").strip()
-            if phone:
-                save_env_value("WHATSAPP_ALLOWED_USERS", phone.replace(" ", ""))
-                print(f"  ✓ Updated to: {phone}")
-    else:
-        print()
-        if wa_mode == "bot":
-            print("  Who should be allowed to message the bot?")
-            phone = input("  Phone numbers (comma-separated, or * for anyone): ").strip()
-        else:
-            phone = input("  Your phone number (e.g. 15551234567): ").strip()
-        if phone:
-            save_env_value("WHATSAPP_ALLOWED_USERS", phone.replace(" ", ""))
-            print(f"  ✓ Allowed users set: {phone}")
-        else:
-            print("  ⚠ No allowlist — the agent will respond to ALL incoming messages")
-
-    # ── Step 4: Install bridge dependencies ──────────────────────────────
-    project_root = Path(__file__).resolve().parents[1]
-    bridge_dir = project_root / "scripts" / "whatsapp-bridge"
-    bridge_script = bridge_dir / "bridge.js"
-
-    if not bridge_script.exists():
-        print(f"\n✗ Bridge script not found at {bridge_script}")
-        return
-
-    if not (bridge_dir / "node_modules").exists():
-        print("\n→ Installing WhatsApp bridge dependencies...")
-        result = subprocess.run(
-            ["npm", "install"],
-            cwd=str(bridge_dir),
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        if result.returncode != 0:
-            print(f"  ✗ npm install failed: {result.stderr}")
-            return
-        print("  ✓ Dependencies installed")
-    else:
-        print("✓ Bridge dependencies already installed")
-
-    # ── Step 5: Check for existing session ───────────────────────────────
-    session_dir = get_gauss_home() / "whatsapp" / "session"
-    session_dir.mkdir(parents=True, exist_ok=True)
-
-    if (session_dir / "creds.json").exists():
-        print("✓ Existing WhatsApp session found")
-        try:
-            response = input("\n  Re-pair? This will clear the existing session. [y/N] ").strip()
-        except (EOFError, KeyboardInterrupt):
-            response = "n"
-        if response.lower() in ("y", "yes"):
-            import shutil
-            shutil.rmtree(session_dir, ignore_errors=True)
-            session_dir.mkdir(parents=True, exist_ok=True)
-            print("  ✓ Session cleared")
-        else:
-            print("\n✓ WhatsApp is configured and paired!")
-            print("  Start the gateway with: gauss gateway")
-            return
-
-    # ── Step 6: QR code pairing ──────────────────────────────────────────
-    print()
-    print("─" * 50)
-    if wa_mode == "bot":
-        print("📱 Open WhatsApp (or WhatsApp Business) on the")
-        print("   phone with the BOT's number, then scan:")
-    else:
-        print("📱 Open WhatsApp on your phone, then scan:")
-    print()
-    print("   Settings → Linked Devices → Link a Device")
-    print("─" * 50)
-    print()
-
-    try:
-        subprocess.run(
-            ["node", str(bridge_script), "--pair-only", "--session", str(session_dir)],
-            cwd=str(bridge_dir),
-        )
-    except KeyboardInterrupt:
-        pass
-
-    # ── Step 7: Post-pairing ─────────────────────────────────────────────
-    print()
-    if (session_dir / "creds.json").exists():
-        print("✓ WhatsApp paired successfully!")
-        print()
-        if wa_mode == "bot":
-            print("  Next steps:")
-            print("    1. Start the gateway:  gauss gateway")
-            print("    2. Send a message to the bot's WhatsApp number")
-            print("    3. The agent will reply automatically")
-            print()
-            print("  Tip: Agent responses are prefixed with '∑ Gauss'")
-        else:
-            print("  Next steps:")
-            print("    1. Start the gateway:  gauss gateway")
-            print("    2. Open WhatsApp → Message Yourself")
-            print("    3. Type a message — the agent will reply")
-            print()
-            print("  Tip: Agent responses are prefixed with '∑ Gauss'")
-            print("  so you can tell them apart from your own messages.")
-        print()
-        print("  Or install as a service: gauss gateway install")
-    else:
-        print("⚠ Pairing may not have completed. Run 'gauss whatsapp' to try again.")
 
 
 def cmd_setup(args):
@@ -1824,12 +1628,6 @@ def cmd_status(args):
     show_status(args)
 
 
-def cmd_cron(args):
-    """Cron job management."""
-    from gauss_cli.cron import cron_command
-    cron_command(args)
-
-
 def cmd_doctor(args):
     """Check configuration and dependencies."""
     from gauss_cli.doctor import run_doctor
@@ -2267,61 +2065,6 @@ def cmd_update(args):
         print()
         print("✓ Update complete!")
         
-        # Auto-restart gateway if it's running.
-        # Uses the PID file (scoped to GAUSS_HOME) to find this
-        # installation's gateway — safe with multiple installations.
-        try:
-            from gateway.status import get_running_pid, remove_pid_file
-            from gauss_cli.gateway import get_service_name
-            import signal as _signal
-
-            _gw_service_name = get_service_name()
-            existing_pid = get_running_pid()
-            has_systemd_service = False
-
-            try:
-                check = subprocess.run(
-                    ["systemctl", "--user", "is-active", _gw_service_name],
-                    capture_output=True, text=True, timeout=5,
-                )
-                has_systemd_service = check.stdout.strip() == "active"
-            except (FileNotFoundError, subprocess.TimeoutExpired):
-                pass
-
-            if existing_pid or has_systemd_service:
-                print()
-
-                # Kill the PID-file-tracked process (may be manual or systemd)
-                if existing_pid:
-                    try:
-                        os.kill(existing_pid, _signal.SIGTERM)
-                        print(f"→ Stopped gateway process (PID {existing_pid})")
-                    except ProcessLookupError:
-                        pass  # Already gone
-                    except PermissionError:
-                        print(f"⚠ Permission denied killing gateway PID {existing_pid}")
-                    remove_pid_file()
-
-                # Restart the systemd service (starts a fresh process)
-                if has_systemd_service:
-                    import time as _time
-                    _time.sleep(1)  # Brief pause for port/socket release
-                    print("→ Restarting gateway service...")
-                    restart = subprocess.run(
-                        ["systemctl", "--user", "restart", _gw_service_name],
-                        capture_output=True, text=True, timeout=15,
-                    )
-                    if restart.returncode == 0:
-                        print("✓ Gateway restarted.")
-                    else:
-                        print(f"⚠ Gateway restart failed: {restart.stderr.strip()}")
-                        print("  Try manually: gauss gateway restart")
-                elif existing_pid:
-                    print("  ℹ️  Gateway was running manually (not as a service).")
-                    print("  Restart it with: gauss gateway run")
-        except Exception as e:
-            logger.debug("Gateway restart during update failed: %s", e)
-        
         print()
         print("Tip: You can now select a provider and model:")
         print(f"  {get_cli_command_name()} model              # Select provider and model")
@@ -2349,8 +2092,8 @@ def _coalesce_session_name_args(argv: list) -> list:
     or a known top-level subcommand.
     """
     _SUBCOMMANDS = {
-        "chat", "model", "gateway", "setup", "whatsapp", "login", "logout",
-        "status", "cron", "doctor", "config", "pairing", "skills", "tools",
+        "chat", "model", "setup", "login", "logout",
+        "status", "doctor", "config", "tools",
         "sessions", "insights", "version", "update", "uninstall",
     }
     _SESSION_FLAGS = {"-c", "--continue", "-r", "--resume"}
@@ -2549,66 +2292,18 @@ For more help on a command:
     model_parser.set_defaults(func=cmd_model)
 
     # =========================================================================
-    # gateway command
-    # =========================================================================
-    gateway_parser = subparsers.add_parser(
-        "gateway",
-        help=argparse.SUPPRESS,
-        description="Manage the messaging gateway (Telegram, Discord, WhatsApp)"
-    )
-    gateway_subparsers = gateway_parser.add_subparsers(dest="gateway_command")
-    
-    # gateway run (default)
-    gateway_run = gateway_subparsers.add_parser("run", help="Run gateway in foreground")
-    gateway_run.add_argument("-v", "--verbose", action="store_true")
-    gateway_run.add_argument("--replace", action="store_true",
-                             help="Replace any existing gateway instance (useful for systemd)")
-    
-    # gateway start
-    gateway_start = gateway_subparsers.add_parser("start", help="Start gateway service")
-    gateway_start.add_argument("--system", action="store_true", help="Target the Linux system-level gateway service")
-    
-    # gateway stop
-    gateway_stop = gateway_subparsers.add_parser("stop", help="Stop gateway service")
-    gateway_stop.add_argument("--system", action="store_true", help="Target the Linux system-level gateway service")
-    
-    # gateway restart
-    gateway_restart = gateway_subparsers.add_parser("restart", help="Restart gateway service")
-    gateway_restart.add_argument("--system", action="store_true", help="Target the Linux system-level gateway service")
-    
-    # gateway status
-    gateway_status = gateway_subparsers.add_parser("status", help="Show gateway status")
-    gateway_status.add_argument("--deep", action="store_true", help="Deep status check")
-    gateway_status.add_argument("--system", action="store_true", help="Target the Linux system-level gateway service")
-    
-    # gateway install
-    gateway_install = gateway_subparsers.add_parser("install", help="Install gateway as service")
-    gateway_install.add_argument("--force", action="store_true", help="Force reinstall")
-    gateway_install.add_argument("--system", action="store_true", help="Install as a Linux system-level service (starts at boot)")
-    gateway_install.add_argument("--run-as-user", dest="run_as_user", help="User account the Linux system service should run as")
-    
-    # gateway uninstall
-    gateway_uninstall = gateway_subparsers.add_parser("uninstall", help="Uninstall gateway service")
-    gateway_uninstall.add_argument("--system", action="store_true", help="Target the Linux system-level gateway service")
-
-    # gateway setup
-    gateway_setup = gateway_subparsers.add_parser("setup", help="Configure messaging platforms")
-
-    gateway_parser.set_defaults(func=cmd_gateway)
-    
-    # =========================================================================
     # setup command
     # =========================================================================
     setup_parser = subparsers.add_parser(
         "setup",
         help="Interactive setup wizard",
         description="Configure Gauss with an interactive wizard. "
-                    "Run a specific section: gauss setup model|terminal|gateway|tools|agent"
+                    "Run a specific section: gauss setup model|terminal|tools|agent"
     )
     setup_parser.add_argument(
         "section",
         nargs="?",
-        choices=["model", "terminal", "gateway", "tools", "agent"],
+        choices=["model", "terminal", "tools", "agent"],
         default=None,
         help="Run a specific setup section instead of the full wizard"
     )
@@ -2623,16 +2318,6 @@ For more help on a command:
         help="Reset configuration to defaults"
     )
     setup_parser.set_defaults(func=cmd_setup)
-
-    # =========================================================================
-    # whatsapp command
-    # =========================================================================
-    whatsapp_parser = subparsers.add_parser(
-        "whatsapp",
-        help=argparse.SUPPRESS,
-        description="Configure WhatsApp and pair via QR code"
-    )
-    whatsapp_parser.set_defaults(func=cmd_whatsapp)
 
     # =========================================================================
     # login command
@@ -2725,63 +2410,6 @@ For more help on a command:
     status_parser.set_defaults(func=cmd_status)
     
     # =========================================================================
-    # cron command
-    # =========================================================================
-    cron_parser = subparsers.add_parser(
-        "cron",
-        help=argparse.SUPPRESS,
-        description="Manage scheduled tasks"
-    )
-    cron_subparsers = cron_parser.add_subparsers(dest="cron_command")
-    
-    # cron list
-    cron_list = cron_subparsers.add_parser("list", help="List scheduled jobs")
-    cron_list.add_argument("--all", action="store_true", help="Include disabled jobs")
-
-    # cron create/add
-    cron_create = cron_subparsers.add_parser("create", aliases=["add"], help="Create a scheduled job")
-    cron_create.add_argument("schedule", help="Schedule like '30m', 'every 2h', or '0 9 * * *'")
-    cron_create.add_argument("prompt", nargs="?", help="Optional self-contained prompt or task instruction")
-    cron_create.add_argument("--name", help="Optional human-friendly job name")
-    cron_create.add_argument("--deliver", help="Delivery target: origin, local, telegram, discord, signal, or platform:chat_id")
-    cron_create.add_argument("--repeat", type=int, help="Optional repeat count")
-    cron_create.add_argument("--skill", dest="skills", action="append", help="Attach a skill. Repeat to add multiple skills.")
-
-    # cron edit
-    cron_edit = cron_subparsers.add_parser("edit", help="Edit an existing scheduled job")
-    cron_edit.add_argument("job_id", help="Job ID to edit")
-    cron_edit.add_argument("--schedule", help="New schedule")
-    cron_edit.add_argument("--prompt", help="New prompt/task instruction")
-    cron_edit.add_argument("--name", help="New job name")
-    cron_edit.add_argument("--deliver", help="New delivery target")
-    cron_edit.add_argument("--repeat", type=int, help="New repeat count")
-    cron_edit.add_argument("--skill", dest="skills", action="append", help="Replace the job's skills with this set. Repeat to attach multiple skills.")
-    cron_edit.add_argument("--add-skill", dest="add_skills", action="append", help="Append a skill without replacing the existing list. Repeatable.")
-    cron_edit.add_argument("--remove-skill", dest="remove_skills", action="append", help="Remove a specific attached skill. Repeatable.")
-    cron_edit.add_argument("--clear-skills", action="store_true", help="Remove all attached skills from the job")
-
-    # lifecycle actions
-    cron_pause = cron_subparsers.add_parser("pause", help="Pause a scheduled job")
-    cron_pause.add_argument("job_id", help="Job ID to pause")
-
-    cron_resume = cron_subparsers.add_parser("resume", help="Resume a paused job")
-    cron_resume.add_argument("job_id", help="Job ID to resume")
-
-    cron_run = cron_subparsers.add_parser("run", help="Run a job on the next scheduler tick")
-    cron_run.add_argument("job_id", help="Job ID to trigger")
-
-    cron_remove = cron_subparsers.add_parser("remove", aliases=["rm", "delete"], help="Remove a scheduled job")
-    cron_remove.add_argument("job_id", help="Job ID to remove")
-
-    # cron status
-    cron_subparsers.add_parser("status", help="Check if cron scheduler is running")
-
-    # cron tick (mostly for debugging)
-    cron_subparsers.add_parser("tick", help="Run due jobs once and exit")
-
-    cron_parser.set_defaults(func=cmd_cron)
-    
-    # =========================================================================
     # doctor command
     # =========================================================================
     doctor_parser = subparsers.add_parser(
@@ -2832,120 +2460,12 @@ For more help on a command:
     config_parser.set_defaults(func=cmd_config)
     
     # =========================================================================
-    # pairing command
-    # =========================================================================
-    pairing_parser = subparsers.add_parser(
-        "pairing",
-        help=argparse.SUPPRESS,
-        description="Approve or revoke user access via pairing codes"
-    )
-    pairing_sub = pairing_parser.add_subparsers(dest="pairing_action")
-
-    pairing_list_parser = pairing_sub.add_parser("list", help="Show pending + approved users")
-
-    pairing_approve_parser = pairing_sub.add_parser("approve", help="Approve a pairing code")
-    pairing_approve_parser.add_argument("platform", help="Platform name (telegram, discord, slack, whatsapp)")
-    pairing_approve_parser.add_argument("code", help="Pairing code to approve")
-
-    pairing_revoke_parser = pairing_sub.add_parser("revoke", help="Revoke user access")
-    pairing_revoke_parser.add_argument("platform", help="Platform name")
-    pairing_revoke_parser.add_argument("user_id", help="User ID to revoke")
-
-    pairing_clear_parser = pairing_sub.add_parser("clear-pending", help="Clear all pending codes")
-
-    def cmd_pairing(args):
-        from gauss_cli.pairing import pairing_command
-        pairing_command(args)
-
-    pairing_parser.set_defaults(func=cmd_pairing)
-
-    # =========================================================================
-    # skills command
-    # =========================================================================
-    skills_parser = subparsers.add_parser(
-        "skills",
-        help=argparse.SUPPRESS,
-        description="Search, install, inspect, audit, configure, and manage skills from skills.sh, well-known agent skill endpoints, GitHub, ClawHub, and other registries."
-    )
-    skills_subparsers = skills_parser.add_subparsers(dest="skills_action")
-
-    skills_browse = skills_subparsers.add_parser("browse", help="Browse all available skills (paginated)")
-    skills_browse.add_argument("--page", type=int, default=1, help="Page number (default: 1)")
-    skills_browse.add_argument("--size", type=int, default=20, help="Results per page (default: 20)")
-    skills_browse.add_argument("--source", default="all",
-                               choices=["all", "official", "skills-sh", "well-known", "github", "clawhub", "lobehub"],
-                               help="Filter by source (default: all)")
-
-    skills_search = skills_subparsers.add_parser("search", help="Search skill registries")
-    skills_search.add_argument("query", help="Search query")
-    skills_search.add_argument("--source", default="all", choices=["all", "official", "skills-sh", "well-known", "github", "clawhub", "lobehub"])
-    skills_search.add_argument("--limit", type=int, default=10, help="Max results")
-
-    skills_install = skills_subparsers.add_parser("install", help="Install a skill")
-    skills_install.add_argument("identifier", help="Skill identifier (e.g. openai/skills/skill-creator)")
-    skills_install.add_argument("--category", default="", help="Category folder to install into")
-    skills_install.add_argument("--force", "--yes", "-y", dest="force", action="store_true", help="Install despite blocked scan verdict")
-
-    skills_inspect = skills_subparsers.add_parser("inspect", help="Preview a skill without installing")
-    skills_inspect.add_argument("identifier", help="Skill identifier")
-
-    skills_list = skills_subparsers.add_parser("list", help="List installed skills")
-    skills_list.add_argument("--source", default="all", choices=["all", "hub", "builtin", "local"])
-
-    skills_check = skills_subparsers.add_parser("check", help="Check installed hub skills for updates")
-    skills_check.add_argument("name", nargs="?", help="Specific skill to check (default: all)")
-
-    skills_update = skills_subparsers.add_parser("update", help="Update installed hub skills")
-    skills_update.add_argument("name", nargs="?", help="Specific skill to update (default: all outdated skills)")
-
-    skills_audit = skills_subparsers.add_parser("audit", help="Re-scan installed hub skills")
-    skills_audit.add_argument("name", nargs="?", help="Specific skill to audit (default: all)")
-
-    skills_uninstall = skills_subparsers.add_parser("uninstall", help="Remove a hub-installed skill")
-    skills_uninstall.add_argument("name", help="Skill name to remove")
-
-    skills_publish = skills_subparsers.add_parser("publish", help="Publish a skill to a registry")
-    skills_publish.add_argument("skill_path", help="Path to skill directory")
-    skills_publish.add_argument("--to", default="github", choices=["github", "clawhub"], help="Target registry")
-    skills_publish.add_argument("--repo", default="", help="Target GitHub repo (e.g. openai/skills)")
-
-    skills_snapshot = skills_subparsers.add_parser("snapshot", help="Export/import skill configurations")
-    snapshot_subparsers = skills_snapshot.add_subparsers(dest="snapshot_action")
-    snap_export = snapshot_subparsers.add_parser("export", help="Export installed skills to a file")
-    snap_export.add_argument("output", help="Output JSON file path")
-    snap_import = snapshot_subparsers.add_parser("import", help="Import and install skills from a file")
-    snap_import.add_argument("input", help="Input JSON file path")
-    snap_import.add_argument("--force", action="store_true", help="Force install despite caution verdict")
-
-    skills_tap = skills_subparsers.add_parser("tap", help="Manage skill sources")
-    tap_subparsers = skills_tap.add_subparsers(dest="tap_action")
-    tap_subparsers.add_parser("list", help="List configured taps")
-    tap_add = tap_subparsers.add_parser("add", help="Add a GitHub repo as skill source")
-    tap_add.add_argument("repo", help="GitHub repo (e.g. owner/repo)")
-    tap_rm = tap_subparsers.add_parser("remove", help="Remove a tap")
-    tap_rm.add_argument("name", help="Tap name to remove")
-
-    # config sub-action: interactive enable/disable
-    skills_subparsers.add_parser("config", help="Interactive skill configuration — enable/disable individual skills")
-
-    def cmd_skills(args):
-        # Route 'config' action to skills_config module
-        if getattr(args, 'skills_action', None) == 'config':
-            from gauss_cli.skills_config import skills_command as skills_config_command
-            skills_config_command(args)
-        else:
-            from gauss_cli.skills_hub import skills_command
-            skills_command(args)
-
-    skills_parser.set_defaults(func=cmd_skills)
-
-    # =========================================================================
     # tools command
     # =========================================================================
     tools_parser = subparsers.add_parser(
         "tools",
-        help=argparse.SUPPRESS,
-        description="Interactive tool configuration — enable/disable tools for CLI, Telegram, Discord, etc."
+        help="Configure CLI tool access",
+        description="Interactive tool configuration for the retained OpenGauss CLI surface"
     )
     tools_parser.add_argument(
         "--summary",
@@ -2969,7 +2489,7 @@ For more help on a command:
     sessions_subparsers = sessions_parser.add_subparsers(dest="sessions_action")
 
     sessions_list = sessions_subparsers.add_parser("list", help="List recent sessions")
-    sessions_list.add_argument("--source", help="Filter by source (cli, telegram, discord, etc.)")
+    sessions_list.add_argument("--source", help="Filter by source (default: cli)")
     sessions_list.add_argument("--limit", type=int, default=20, help="Max sessions to show")
 
     sessions_export = sessions_subparsers.add_parser("export", help="Export sessions to a JSONL file")
@@ -2996,7 +2516,7 @@ For more help on a command:
         "browse",
         help="Interactive session picker — browse, search, and resume sessions",
     )
-    sessions_browse.add_argument("--source", help="Filter by source (cli, telegram, discord, etc.)")
+    sessions_browse.add_argument("--source", help="Filter by source (default: cli)")
     sessions_browse.add_argument("--limit", type=int, default=50, help="Max sessions to load (default: 50)")
 
     def cmd_sessions(args):
@@ -3126,7 +2646,7 @@ For more help on a command:
             msgs = db.message_count()
             print(f"Total sessions: {total}")
             print(f"Total messages: {msgs}")
-            for src in ["cli", "telegram", "discord", "whatsapp", "slack"]:
+            for src in ["cli"]:
                 c = db.session_count(source=src)
                 if c > 0:
                     print(f"  {src}: {c} sessions")
@@ -3151,7 +2671,7 @@ For more help on a command:
         description="Analyze session history to show token usage, costs, tool patterns, and activity trends"
     )
     insights_parser.add_argument("--days", type=int, default=30, help="Number of days to analyze (default: 30)")
-    insights_parser.add_argument("--source", help="Filter by platform (cli, telegram, discord, etc.)")
+    insights_parser.add_argument("--source", help="Filter by source (default: cli)")
 
     def cmd_insights(args):
         try:
@@ -3167,69 +2687,6 @@ For more help on a command:
             print(f"Error generating insights: {e}")
 
     insights_parser.set_defaults(func=cmd_insights)
-
-    # =========================================================================
-    # claw command (OpenClaw migration)
-    # =========================================================================
-    claw_parser = subparsers.add_parser(
-        "claw",
-        help=argparse.SUPPRESS,
-        description="Migrate settings, memories, skills, and API keys from OpenClaw to Gauss"
-    )
-    claw_subparsers = claw_parser.add_subparsers(dest="claw_action")
-
-    # claw migrate
-    claw_migrate = claw_subparsers.add_parser(
-        "migrate",
-        help="Migrate from OpenClaw to Gauss",
-        description="Import settings, memories, skills, and API keys from an OpenClaw installation"
-    )
-    claw_migrate.add_argument(
-        "--source",
-        help="Path to OpenClaw directory (default: ~/.openclaw)"
-    )
-    claw_migrate.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Preview what would be migrated without making changes"
-    )
-    claw_migrate.add_argument(
-        "--preset",
-        choices=["user-data", "full"],
-        default="full",
-        help="Migration preset (default: full). 'user-data' excludes secrets"
-    )
-    claw_migrate.add_argument(
-        "--overwrite",
-        action="store_true",
-        help="Overwrite existing files (default: skip conflicts)"
-    )
-    claw_migrate.add_argument(
-        "--migrate-secrets",
-        action="store_true",
-        help="Include allowlisted secrets (TELEGRAM_BOT_TOKEN, API keys, etc.)"
-    )
-    claw_migrate.add_argument(
-        "--workspace-target",
-        help="Absolute path to copy workspace instructions into"
-    )
-    claw_migrate.add_argument(
-        "--skill-conflict",
-        choices=["skip", "overwrite", "rename"],
-        default="skip",
-        help="How to handle skill name conflicts (default: skip)"
-    )
-    claw_migrate.add_argument(
-        "--yes", "-y",
-        action="store_true",
-        help="Skip confirmation prompts"
-    )
-
-    def cmd_claw(args):
-        from gauss_cli.claw import claw_command
-        claw_command(args)
-
-    claw_parser.set_defaults(func=cmd_claw)
 
     # =========================================================================
     # version command
@@ -3270,27 +2727,6 @@ For more help on a command:
     )
     uninstall_parser.set_defaults(func=cmd_uninstall)
 
-    # =========================================================================
-    # acp command
-    # =========================================================================
-    acp_parser = subparsers.add_parser(
-        "acp",
-        help=argparse.SUPPRESS,
-        description="Start Gauss Agent in ACP mode for editor integration (VS Code, Zed, JetBrains)",
-    )
-
-    def cmd_acp(args):
-        """Launch Gauss Agent as an ACP server."""
-        try:
-            from acp_adapter.entry import main as acp_main
-            acp_main()
-        except ImportError:
-            print("ACP dependencies not installed.")
-            print("Install them with:  pip install -e '.[acp]'")
-            sys.exit(1)
-
-    acp_parser.set_defaults(func=cmd_acp)
-    
     # =========================================================================
     # Parse and execute
     # =========================================================================

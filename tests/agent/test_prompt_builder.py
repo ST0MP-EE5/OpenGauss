@@ -469,16 +469,12 @@ class TestPromptBuilderConstants:
         assert "You are Gauss" in DEFAULT_AGENT_IDENTITY
 
     def test_platform_hints_known_platforms(self):
-        assert "whatsapp" in PLATFORM_HINTS
-        assert "telegram" in PLATFORM_HINTS
-        assert "discord" in PLATFORM_HINTS
-        assert "cron" in PLATFORM_HINTS
         assert "cli" in PLATFORM_HINTS
 
-    def test_telegram_hint_mentions_supported_markdown(self):
-        hint = PLATFORM_HINTS["telegram"]
-        assert "Standard markdown is automatically converted" in hint
-        assert "Supported:" in hint
+    def test_cli_hint_mentions_terminal_output(self):
+        hint = PLATFORM_HINTS["cli"]
+        assert "CLI AI Agent" in hint
+        assert "terminal" in hint
 
 
 # =========================================================================

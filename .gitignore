@@ -52,6 +52,7 @@ ignored/
 environments/benchmarks/evals/
 .formalqualbench-runs/
 .formalqualbench-smoke/
+.plans/
 
 # Release script temp files
 .release_notes.md

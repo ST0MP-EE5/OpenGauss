@@ -141,10 +141,7 @@ class TestToolsetConsistency:
             for inc in ts["includes"]:
                 assert inc in TOOLSETS, f"{name} includes unknown toolset '{inc}'"
 
-    def test_gauss_platforms_share_core_tools(self):
-        """All gauss-* platform toolsets should have the same tools."""
-        platforms = ["gauss-cli", "gauss-telegram", "gauss-discord", "gauss-whatsapp", "gauss-slack", "gauss-signal", "gauss-homeassistant"]
-        tool_sets = [set(TOOLSETS[p]["tools"]) for p in platforms]
-        # All platform toolsets should be identical
-        for ts in tool_sets[1:]:
-            assert ts == tool_sets[0]
+    def test_gauss_cli_toolset_exists(self):
+        """The contracted repo keeps a single Gauss CLI toolset."""
+        assert "gauss-cli" in TOOLSETS
+        assert TOOLSETS["gauss-cli"]["tools"]

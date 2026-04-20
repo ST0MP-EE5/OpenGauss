@@ -26,7 +26,7 @@ Usage:
 from typing import List, Dict, Any, Set, Optional
 
 
-# Shared tool list for CLI and all messaging platform toolsets.
+# Shared tool list for the retained OpenGauss CLI surface.
 # Gauss is intentionally narrow here: file work, web lookup, and browser use.
 _GAUSS_CORE_TOOLS = [
     # File manipulation
@@ -95,70 +95,10 @@ TOOLSETS = {
         "includes": ["web", "file", "browser"]
     },
     
-    # ==========================================================================
-    # Full Gauss toolsets (CLI + messaging platforms)
-    #
-    # All platforms share the same minimal Gauss core tools.
-    # ==========================================================================
-
-    "gauss-acp": {
-        "description": "Editor integration (VS Code, Zed, JetBrains) — minimal file, web, and browser tools for Gauss work",
-        "tools": _GAUSS_CORE_TOOLS,
-        "includes": []
-    },
-    
     "gauss-cli": {
         "description": "Minimal interactive Gauss toolset for autoformalization workflows",
         "tools": _GAUSS_CORE_TOOLS,
         "includes": []
-    },
-    
-    "gauss-telegram": {
-        "description": "Telegram bot toolset - minimal Gauss file, web, and browser access",
-        "tools": _GAUSS_CORE_TOOLS,
-        "includes": []
-    },
-    
-    "gauss-discord": {
-        "description": "Discord bot toolset - minimal Gauss file, web, and browser access",
-        "tools": _GAUSS_CORE_TOOLS,
-        "includes": []
-    },
-    
-    "gauss-whatsapp": {
-        "description": "WhatsApp bot toolset - minimal Gauss file, web, and browser access",
-        "tools": _GAUSS_CORE_TOOLS,
-        "includes": []
-    },
-    
-    "gauss-slack": {
-        "description": "Slack bot toolset - minimal Gauss file, web, and browser access",
-        "tools": _GAUSS_CORE_TOOLS,
-        "includes": []
-    },
-    
-    "gauss-signal": {
-        "description": "Signal bot toolset - minimal Gauss file, web, and browser access",
-        "tools": _GAUSS_CORE_TOOLS,
-        "includes": []
-    },
-
-    "gauss-homeassistant": {
-        "description": "Home Assistant bot toolset - minimal Gauss file, web, and browser access",
-        "tools": _GAUSS_CORE_TOOLS,
-        "includes": []
-    },
-
-    "gauss-email": {
-        "description": "Email bot toolset - minimal Gauss file, web, and browser access",
-        "tools": _GAUSS_CORE_TOOLS,
-        "includes": []
-    },
-
-    "gauss-gateway": {
-        "description": "Gateway toolset - union of the minimal messaging-platform tool surfaces",
-        "tools": [],
-        "includes": ["gauss-telegram", "gauss-discord", "gauss-whatsapp", "gauss-slack", "gauss-signal", "gauss-homeassistant", "gauss-email"]
     }
 }
 

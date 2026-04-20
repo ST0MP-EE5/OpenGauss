@@ -34,9 +34,9 @@ from gauss_cli.config import get_gauss_home  # noqa: E402
 
 
 DEFAULT_TASKS = (
-    "JordanCycleTheorem",
     "PontryaginDuality",
     "BurnsidePrimeDegreeTheorem",
+    "JordanCycleTheorem",
 )
 DEFAULT_FORMALQUALBENCH_REPO = "https://github.com/math-inc/FormalQualBench.git"
 DEFAULT_FORMALQUALBENCH_REF = "main"
@@ -63,6 +63,9 @@ class EvalConfig:
     system_name: str = ""
     task_filter: tuple[str, ...] = DEFAULT_TASKS
     task_timeout_seconds: int = 4 * 60 * 60
+    stagnation_timeout_seconds: int = 30 * 60
+    stagnation_grace_seconds: int = 5 * 60
+    stagnation_poll_seconds: int = 15
     formalqualbench_repo: str = DEFAULT_FORMALQUALBENCH_REPO
     formalqualbench_ref: str = DEFAULT_FORMALQUALBENCH_REF
     comparator_repo: str = DEFAULT_COMPARATOR_REPO
@@ -85,6 +88,7 @@ class ProcessResult:
     stderr: str
     duration_seconds: float
     timed_out: bool = False
+    idle_timed_out: bool = False
     error: str | None = None
 
 
@@ -141,6 +145,24 @@ def load_eval_config(config_path: Path, cli_overrides: dict[str, str] | None = N
         task_filter=_parse_task_filter(cli_overrides.get("env.task_filter", env_cfg.get("task_filter"))),
         task_timeout_seconds=int(
             cli_overrides.get("env.task_timeout_seconds", env_cfg.get("task_timeout_seconds", 4 * 60 * 60))
+        ),
+        stagnation_timeout_seconds=int(
+            cli_overrides.get(
+                "env.stagnation_timeout_seconds",
+                env_cfg.get("stagnation_timeout_seconds", 30 * 60),
+            )
+        ),
+        stagnation_grace_seconds=int(
+            cli_overrides.get(
+                "env.stagnation_grace_seconds",
+                env_cfg.get("stagnation_grace_seconds", 5 * 60),
+            )
+        ),
+        stagnation_poll_seconds=int(
+            cli_overrides.get(
+                "env.stagnation_poll_seconds",
+                env_cfg.get("stagnation_poll_seconds", 15),
+            )
         ),
         formalqualbench_repo=str(env_cfg.get("formalqualbench_repo", DEFAULT_FORMALQUALBENCH_REPO)),
         formalqualbench_ref=str(env_cfg.get("formalqualbench_ref", DEFAULT_FORMALQUALBENCH_REF)),
@@ -229,6 +251,106 @@ def _run_checked(
         stderr=completed.stderr or "",
         duration_seconds=round(time.time() - start, 3),
     )
+
+
+def _latest_progress_timestamp(paths: list[Path]) -> float | None:
+    latest: float | None = None
+    for path in paths:
+        if not path.exists():
+            continue
+        try:
+            candidate = path.stat().st_mtime
+        except OSError:
+            continue
+        latest = candidate if latest is None else max(latest, candidate)
+        if path.is_dir():
+            for child in path.rglob("*"):
+                try:
+                    child_mtime = child.stat().st_mtime
+                except OSError:
+                    continue
+                latest = max(latest, child_mtime)
+    return latest
+
+
+def _run_checked_with_stagnation(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str] | None = None,
+    timeout_seconds: int | None = None,
+    progress_paths: list[Path] | None = None,
+    idle_timeout_seconds: int,
+    idle_grace_seconds: int,
+    poll_seconds: int,
+) -> ProcessResult:
+    start = time.time()
+    process = subprocess.Popen(
+        command,
+        cwd=str(cwd),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    progress_paths = progress_paths or []
+    last_progress = _latest_progress_timestamp(progress_paths) or start
+    deadline = (start + timeout_seconds) if timeout_seconds is not None else None
+    poll_interval = max(1, poll_seconds)
+    try:
+        while True:
+            remaining: float | None
+            if deadline is None:
+                remaining = None
+            else:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    process.kill()
+                    stdout, stderr = process.communicate()
+                    return ProcessResult(
+                        returncode=None,
+                        stdout=stdout or "",
+                        stderr=stderr or "",
+                        duration_seconds=round(time.time() - start, 3),
+                        timed_out=True,
+                        error=f"Timed out after {timeout_seconds}s",
+                    )
+            try:
+                stdout, stderr = process.communicate(
+                    timeout=poll_interval if remaining is None else min(poll_interval, max(0.1, remaining))
+                )
+                return ProcessResult(
+                    returncode=process.returncode,
+                    stdout=stdout or "",
+                    stderr=stderr or "",
+                    duration_seconds=round(time.time() - start, 3),
+                )
+            except subprocess.TimeoutExpired:
+                current_progress = _latest_progress_timestamp(progress_paths)
+                if current_progress is not None and current_progress > last_progress:
+                    last_progress = current_progress
+                    continue
+                now = time.time()
+                if (
+                    idle_timeout_seconds > 0
+                    and now - start >= idle_grace_seconds
+                    and now - last_progress >= idle_timeout_seconds
+                ):
+                    process.kill()
+                    stdout, stderr = process.communicate()
+                    return ProcessResult(
+                        returncode=None,
+                        stdout=stdout or "",
+                        stderr=stderr or "",
+                        duration_seconds=round(now - start, 3),
+                        timed_out=True,
+                        idle_timed_out=True,
+                        error=f"No progress detected for {idle_timeout_seconds}s",
+                    )
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.communicate()
 
 
 def _ensure_git_checkout(repo_url: str, revision: str, destination: Path) -> Path:
@@ -460,31 +582,52 @@ def _run_one_task(
         ),
     )
 
-    backend_result = _run_checked(
+    managed_root = artifact_dir / "managed"
+    backend_result = _run_checked_with_stagnation(
         list(launch_plan.handoff_request.argv),
         cwd=Path(launch_plan.handoff_request.cwd),
         env=launch_plan.handoff_request.env,
         timeout_seconds=config.task_timeout_seconds,
+        progress_paths=[solution_path, managed_root],
+        idle_timeout_seconds=config.stagnation_timeout_seconds,
+        idle_grace_seconds=config.stagnation_grace_seconds,
+        poll_seconds=config.stagnation_poll_seconds,
     )
     (artifact_dir / "backend.stdout.log").write_text(backend_result.stdout, encoding="utf-8")
     (artifact_dir / "backend.stderr.log").write_text(backend_result.stderr, encoding="utf-8")
 
-    lake_result = _run_checked(
-        ["lake", "build", "Challenge", "Solution"],
-        cwd=workspace_root,
-        timeout_seconds=min(config.task_timeout_seconds, 30 * 60),
-    )
-    (artifact_dir / "lake_build.stdout.log").write_text(lake_result.stdout, encoding="utf-8")
-    (artifact_dir / "lake_build.stderr.log").write_text(lake_result.stderr, encoding="utf-8")
-
     theorem_names = _extract_theorem_names(challenge_path)
     comparator_config_path = artifact_dir / "comparator_config.json"
     _write_json(comparator_config_path, _comparator_config_payload(config, theorem_names))
-    comparator_result = _run_checked(
-        ["lake", "env", str(comparator_binary), str(comparator_config_path)],
-        cwd=workspace_root,
-        timeout_seconds=min(config.task_timeout_seconds, 30 * 60),
-    )
+
+    if backend_result.idle_timed_out:
+        lake_result = ProcessResult(
+            returncode=None,
+            stdout="",
+            stderr="",
+            duration_seconds=0.0,
+            error="Skipped because backend stagnated before producing a proof candidate",
+        )
+        comparator_result = ProcessResult(
+            returncode=None,
+            stdout="",
+            stderr="",
+            duration_seconds=0.0,
+            error="Skipped because backend stagnated before comparator validation",
+        )
+    else:
+        lake_result = _run_checked(
+            ["lake", "build", "Challenge", "Solution"],
+            cwd=workspace_root,
+            timeout_seconds=min(config.task_timeout_seconds, 30 * 60),
+        )
+        comparator_result = _run_checked(
+            ["lake", "env", str(comparator_binary), str(comparator_config_path)],
+            cwd=workspace_root,
+            timeout_seconds=min(config.task_timeout_seconds, 30 * 60),
+        )
+    (artifact_dir / "lake_build.stdout.log").write_text(lake_result.stdout, encoding="utf-8")
+    (artifact_dir / "lake_build.stderr.log").write_text(lake_result.stderr, encoding="utf-8")
     (artifact_dir / "comparator.stdout.log").write_text(comparator_result.stdout, encoding="utf-8")
     (artifact_dir / "comparator.stderr.log").write_text(comparator_result.stderr, encoding="utf-8")
 
@@ -506,6 +649,7 @@ def _run_one_task(
         "theorem_names": theorem_names,
         "backend_returncode": backend_result.returncode,
         "backend_timed_out": backend_result.timed_out,
+        "backend_idle_timed_out": backend_result.idle_timed_out,
         "backend_error": backend_result.error,
         "lake_build_returncode": lake_result.returncode,
         "lake_build_timed_out": lake_result.timed_out,

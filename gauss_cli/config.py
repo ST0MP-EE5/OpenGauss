@@ -114,7 +114,7 @@ def ensure_gauss_home():
     home = get_gauss_home()
     home.mkdir(parents=True, exist_ok=True)
     _secure_dir(home)
-    for subdir in ("cron", "sessions", "logs", "memories"):
+    for subdir in ("sessions", "logs", "memories"):
         d = home / subdir
         d.mkdir(parents=True, exist_ok=True)
         _secure_dir(d)
@@ -132,7 +132,7 @@ DEFAULT_CONFIG = {
             "legacy_cli_surface": False,
         },
         "autoformalize": {
-            "backend": "claude-code",
+            "backend": "forge",
             "handoff_mode": "auto",
             "auth_mode": "auto",
             "managed_state_dir": "",
@@ -330,7 +330,7 @@ DEFAULT_CONFIG = {
 
     # Subagent delegation — override the provider:model used by delegate_task
     # so child agents can run on a different (cheaper/faster) provider and model.
-    # Uses the same runtime provider resolution as CLI/gateway startup, so all
+    # Uses the same runtime provider resolution as the CLI startup path, so all
     # configured providers (OpenRouter, Nous, Z.ai, Kimi, etc.) are supported.
     "delegation": {
         "model": "",       # e.g. "google/gemini-3-flash-preview" (empty = inherit parent model)
@@ -347,13 +347,6 @@ DEFAULT_CONFIG = {
     # IANA timezone (e.g. "Asia/Kolkata", "America/New_York").
     # Empty string means use server-local time.
     "timezone": "",
-
-    # Discord platform settings (gateway mode)
-    "discord": {
-        "require_mention": True,       # Require @mention to respond in server channels
-        "free_response_channels": "",  # Comma-separated channel IDs where bot responds without mention
-        "auto_thread": True,           # Auto-create threads on @mention in channels (like Slack)
-    },
 
     # Approval mode for dangerous commands:
     #   manual — always prompt the user (default)
@@ -1405,16 +1398,6 @@ def show_config():
                 if mdl:
                     parts.append(f"model={mdl}")
                 print(f"  {label:12s}  {', '.join(parts)}")
-    
-    # Messaging
-    print()
-    print(color("◆ Messaging Platforms", Colors.CYAN, Colors.BOLD))
-    
-    telegram_token = get_env_value('TELEGRAM_BOT_TOKEN')
-    discord_token = get_env_value('DISCORD_BOT_TOKEN')
-    
-    print(f"  Telegram:     {'configured' if telegram_token else color('not configured', Colors.DIM)}")
-    print(f"  Discord:      {'configured' if discord_token else color('not configured', Colors.DIM)}")
     
     print()
     print(color("─" * 60, Colors.DIM))

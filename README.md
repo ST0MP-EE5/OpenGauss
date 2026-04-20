@@ -1,79 +1,49 @@
-<p align="center">
-  <a href="https://morph.new/opengauss-0-2-2">
-    <img src="https://img.shields.io/badge/Open%20in-Morph-f23f42?style=for-the-badge" alt="Open in Morph">
-  </a>
-</p>
+# OpenGauss
 
-# Open Gauss
+OpenGauss is a Lean-first workspace for managed theorem work. The retained product surface in this repository is:
 
-Open Gauss is a project-scoped Lean workflow orchestrator from Math, Inc. It gives `gauss` a multi-agent frontend for the `lean4-skills` `prove`, `draft`, `review`, `checkpoint`, `refactor`, `golf`, `autoprove`, `formalize`, and `autoformalize` workflows, while staging the Lean tooling, MCP/LSP wiring, and backend session state those workflows need.
+- the OpenGauss CLI and project model
+- managed `forge` and `codex` backend lanes
+- the FormalQualBench benchmark environment
+- the auth/runtime bridge and environment substrate that those flows need
+- installer scripts and minimal operating documentation
 
-> New to OpenGauss, Lean tooling, or AI-agent workflows?
-> Start with the [Start Here guide](website/docs/getting-started/start-here.md).
->
-> Very short version:
-> - Morph: open [https://morph.new/opengauss-0-2-2](https://morph.new/opengauss-0-2-2), claim or save the session early if Morph offers it, then use `gauss-open-guide`, `gauss`, `/chat`, or `/project init`.
-> - Local: run `./scripts/install.sh`, then `gauss-open-guide` or `gauss`, then start with `/chat`, `/project init`, or `/project create`.
+This repository no longer carries the old messaging, ACP, voice, skills-hub, or non-FormalQual benchmark surfaces.
 
-Open Gauss handles project detection, managed backend setup, workflow spawning, swarm tracking, and recovery. The proving and formalization behavior still comes from `cameronfreer/lean4-skills`; Gauss exposes it through a Gauss-native CLI and project model.
+## Start Here
 
-## Current supported surface
+Read the local guide at [docs/getting-started/start-here.md](docs/getting-started/start-here.md).
 
-The current core maintained surface is the Lean + FormalQualBench + Forge/Hyper path:
+The short version:
+
+```bash
+git clone https://github.com/math-inc/OpenGauss.git
+cd OpenGauss
+./scripts/install.sh
+gauss
+```
+
+Inside the CLI:
+
+```text
+/chat
+/project init
+/autoformalize
+/swarm
+```
+
+## Core Product Boundary
+
+OpenGauss is now explicitly scoped to:
 
 - Lean project/runtime flow through the Gauss CLI
-- Managed backends: `forge` and `codex`
-- The FormalQualBench benchmark environment
-- The auth/runtime bridge needed for non-interactive benchmark runs
-- Hermes Hyper as an offline optimizer for the OpenGauss-managed Forge lane
+- managed backend staging for `forge` and `codex`
+- FormalQualBench evaluation
+- Hermes Hyper as an offline optimizer for the OpenGauss-managed Forge benchmark lane
 
-The rest of the repository remains available, but it is non-core for this branch and is excluded from the default verification contract:
-
-- ACP/editor integration
-- Gateway and messaging adapters
-- Voice/transcription flows
-- Website and landing-page content
-- Other benchmark, migration, and experimental surfaces
-
-## Core verification
-
-The default local verification target is the core Lean/FormalQual/Forge surface:
-
-```bash
-source .venv/bin/activate
-python -m pytest tests/ -q
-```
-
-Optional non-core suites are opt-in:
-
-```bash
-source .venv/bin/activate
-python -m pytest tests/ -q --run-optional
-python -m pytest tests/ -q --run-optional --run-legacy
-```
-
-You can also opt in with environment variables:
-
-- `GAUSS_RUN_OPTIONAL_TESTS=1`
-- `GAUSS_RUN_LEGACY_TESTS=1`
-
-Each lifted slash command spawns a managed backend child agent in the active project and forwards the same argument tail into the corresponding `lean4-skills` workflow command:
-
-- `/prove ...` -> `/lean4:prove ...`
-- `/draft ...` -> `/lean4:draft ...`
-- `/review ...` -> `/lean4:review ...`
-- `/checkpoint ...` -> `/lean4:checkpoint ...`
-- `/refactor ...` -> `/lean4:refactor ...`
-- `/golf ...` -> `/lean4:golf ...`
-- `/autoprove ...` -> `/lean4:autoprove ...`
-- `/formalize ...` -> `/lean4:formalize ...`
-- `/autoformalize ...` -> `/lean4:autoformalize ...`
+The repository is not a general-purpose agent platform in this branch.
 
 ## Install
-
-If you want the fastest pinned release path, [https://morph.new/opengauss-0-2-2](https://morph.new/opengauss-0-2-2) launches the hosted setup in under 10 seconds. The local installers below are the batteries-included path for your own machine and can take up to 10 minutes.
-
-If you are not already comfortable with OpenGauss, read the [Start Here guide](website/docs/getting-started/start-here.md) before picking a workflow.
 
 ### macOS and Linux
 
@@ -83,164 +53,76 @@ cd OpenGauss
 ./scripts/install.sh
 ```
 
-This is the canonical local install path. It bootstraps the local installer runtime, runs the shared `opengauss` installer flow on your machine, and then auto-attaches to the final `gauss` tmux session when possible.
-
-It will:
-
-1. Install `uv` if needed
-2. Create a repo-local installer environment
-3. Install or upgrade the local runner
-4. Run the shared `opengauss` installer flow on your machine
-5. Auto-attach you to the local `gauss` tmux session when possible, or print the exact `tmux attach -t gauss` command if not
-
-You can pass normal template-runner flags through to the alternate script, for example:
-
-```bash
-./scripts/install.sh --plain
-./scripts/install.sh --secret OPENAI_API_KEY=...
-./scripts/install.sh --secret ANTHROPIC_API_KEY=...
-```
-
-### Windows (via WSL2)
-
-Open Gauss on Windows runs through WSL2 using the same shared installer flow.
-
-From PowerShell:
+### Windows via WSL2
 
 ```powershell
 .\scripts\install.ps1 -WithWorkspace
 ```
 
-This bootstrap:
+## Managed Workflows
 
-1. Starts your WSL distro
-2. Clones or updates `OpenGauss` inside your WSL home directory
-3. Runs `./scripts/install.sh` there, which executes the shared `opengauss` installer flow inside WSL
+OpenGauss forwards Lean workflow commands into managed child sessions inside the active project:
 
-If no WSL distro is initialized yet, the bootstrap will install Ubuntu for you with `wsl --install -d Ubuntu`. If that process drops you into the new Linux shell, type `exit` to return to PowerShell and rerun `.\scripts\install.ps1 -WithWorkspace`. Windows may also ask to enable WSL features or restart before you rerun the installer.
+- `/prove`
+- `/draft`
+- `/review`
+- `/checkpoint`
+- `/refactor`
+- `/golf`
+- `/autoprove`
+- `/formalize`
+- `/autoformalize`
+- `/swarm`
 
-If WSL is not installed yet:
+The maintained managed backends are:
 
-```powershell
-wsl --install -d Ubuntu
-```
+- `forge`
+- `codex`
 
-You can also install manually inside WSL:
+The default managed backend for the FormalQual path is `forge`.
+
+## FormalQualBench
+
+The retained benchmark environment lives at:
+
+- `environments/benchmarks/formalqualbench`
+
+The OpenGauss-native benchmark path is:
+
+`FormalQualBench env -> OpenGauss runtime -> forge/codex managed backend -> Lean workspace -> Comparator`
+
+Hermes Hyper is kept out of the runtime path and only optimizes the OpenGauss-managed Forge benchmark surface offline.
+
+## Verification
+
+The default suite is the real remaining full suite for this repo:
 
 ```bash
-wsl
-git clone https://github.com/math-inc/OpenGauss.git ~/OpenGauss
-cd ~/OpenGauss
-./scripts/install.sh
+source .venv/bin/activate
+python -m pytest tests/ -q
 ```
 
-Use a Linux path such as `~/OpenGauss`, not `/mnt/c/...`, for the best performance and terminal behavior.
-## Configuration
-
-### 🖥️ Using Local Models (vLLM)
-If you prefer to run models locally (e.g., using a local GPU) to save on API costs:
-
-1. **Start your vLLM server** (OpenAI-compatible):
-   ```bash
-   python -m vllm.entrypoints.openai.api_server --model <model_name>
-   ```
-
-2. **Point Gauss at that server** with `gauss setup`, or update `OPENAI_BASE_URL` in `~/.gauss/.env`.
-
-### Updating
+Useful targeted checks:
 
 ```bash
-cd OpenGauss
-git pull
-gauss update
+source .venv/bin/activate
+python -m pytest tests/gauss_cli/test_autoformalize.py -q
+python -m pytest tests/test_formalqualbench_env.py -q
+python -m pytest tests/test_environment_auth_bridge.py -q
 ```
 
-## Quick start
+## Repository Layout
 
-If you want the plain-language version first, read the [Start Here guide](website/docs/getting-started/start-here.md).
+The core directories are:
 
-```
-gauss                         # Launch top-level Gauss
-/chat                         # Turn on inline onboarding and plain-language chat
-/project create ~/my-project --template-source <template-or-git-url>
-/prove 1+1=2                  # Spawn a proving agent after selecting a project
-/swarm                        # See running agents
-```
+- `gauss_cli/`
+- `environments/`
+- `tools/`
+- `agent/`
+- `tests/`
+- `scripts/`
+- `docs/`
 
-If you already have a Lean project:
+## Origin
 
-```
-cd ~/my-lean-project
-gauss
-/chat                         # Optional: inline onboarding in the current Gauss session
-/project init                 # Register it as a Gauss project
-/prove                        # Start proving
-```
-
-## The core loop
-
-1. Start the CLI with `gauss`
-2. Create or select the active project with `/project`
-3. Launch `/prove`, `/draft`, `/review`, `/checkpoint`, `/refactor`, `/golf`, `/autoprove`, `/formalize`, or `/autoformalize`
-4. Gauss spawns a managed backend child session that runs the corresponding `lean4-skills` workflow command in the active project
-5. Use `/swarm` to track or reattach to running workflow agents
-
-## Project model
-
-Gauss treats Lean work as project-scoped by default. Before launching managed workflows, select the active project once and then let Gauss keep spawning backend child agents inside that project root.
-
-- `/project init [path] [--name <name>]` registers an existing Lean repo as a Gauss project
-- `/project convert [path] [--name <name>]` registers an existing Lean blueprint repo
-- `/project create <path> [--template-source <source>] [--name <name>]` bootstraps a project from a template and registers it
-- `/project use [path]` pins the current session to an existing Gauss project
-- `/project clear` removes the session override and falls back to ambient project discovery
-
-If you use `/project create` often, set a default template once with
-`gauss.project.template_source` in `~/.gauss/config.yaml` or the
-`GAUSS_BLUEPRINT_TEMPLATE_SOURCE` environment variable.
-
-Gauss discovers `.gauss/project.yaml` upward from the current working directory, but managed workflow child agents launch from the active project root so the forwarded Lean workflow command always runs in the right project context.
-
-## Workflow commands
-
-- `/prove [scope or flags]` — spawn a guided proving agent
-- `/draft [topic or flags]` — draft Lean declaration skeletons
-- `/review [scope or flags]` — spawn a read-only Lean review agent
-- `/checkpoint [scope or flags]` — spawn the Lean checkpoint workflow
-- `/refactor [scope or flags]` — spawn a Lean refactor workflow agent
-- `/golf [scope or flags]` — spawn a Lean proof golfing workflow agent
-- `/autoprove [scope or flags]` — spawn an autonomous proving agent
-- `/formalize [topic or flags]` — spawn an interactive formalization agent
-- `/autoformalize [topic or flags]` — spawn an autonomous formalization agent
-- `/swarm` — list running workflow agents
-- `/swarm attach <task-id>` — reattach to a running agent
-- `/swarm cancel <task-id>` — cancel a running agent
-
-Inside the interactive CLI, Gauss also rewrites common missing-slash forms like `prove ...`, `review ...`, `checkpoint ...`, and `auto-proof ...` into the corresponding managed workflow commands.
-
-## Managed workflow prerequisites
-
-- The current FormalQualBench benchmark path defaults to `forge`
-- Core managed backends for the current benchmark path: `forge`, `codex`
-- `claude-code` remains available, but it is non-core for this branch
-- `forge`, `codex`, or `claude` installed and authenticated for the backend you select
-- Claude auth can come from either:
-  - the normal `claude auth login` flow / Claude credential files
-  - a saved `ANTHROPIC_API_KEY` in `~/.gauss/.env`
-- If both are present, Gauss defaults to Claude's own local auth and only falls back to `ANTHROPIC_API_KEY` when no Claude credentials are available
-- Override with `gauss.autoformalize.auth_mode` in `~/.gauss/config.yaml`:
-  - `auto` (default): prefer local backend auth, then fall back to saved env/API-key auth
-  - `login`: ignore staged API-key auth and let the backend use the normal interactive login flow
-  - `api-key`: force the managed session onto saved env/API-key auth
-- `uv` or `uvx` available
-- `ripgrep` (`rg`) available for Lean local search
-- An active Gauss project selected via `.gauss/project.yaml`
-
-Gauss checks these before launch and tells you exactly what is missing.
-`gauss doctor` also reports the managed-workflow backend, auth mode, `uv` / `lake`
-availability, and whether the current working directory resolves to an active
-Gauss project.
-
----
-
-This repository was forked from `nousresearch/hermes-agent`.
+This repository was forked from `nousresearch/hermes-agent`, then contracted around the Lean/FormalQual/OpenGauss product.

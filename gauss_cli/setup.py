@@ -10,7 +10,6 @@ Modular wizard with independently-runnable sections:
 Config files are stored in ~/.gauss/ for easy access.
 """
 
-import importlib.util
 import logging
 import os
 import sys
@@ -114,8 +113,8 @@ def _setup_provider_model_selection(config, provider_id, current_model, prompt_c
             _set_default_model(config, custom)
     else:
         # "Keep current" selected — validate it's compatible with the new
-        # provider.  OpenRouter-formatted names (containing "/") won't work
-        # on direct-API providers and would silently break the gateway.
+        # provider. OpenRouter-formatted names (containing "/") won't work
+        # on direct-API providers and would silently break direct runtime use.
         if "/" in (current_model or "") and provider_models:
             print_warning(
                 f"Current model \"{current_model}\" looks like an OpenRouter model "
@@ -559,7 +558,7 @@ def _print_setup_summary(config: dict, gauss_home):
     print(f"   {color('Settings:', Colors.YELLOW)}  {get_config_path()}")
     print(f"   {color('API Keys:', Colors.YELLOW)}  {get_env_path()}")
     print(
-        f"   {color('Data:', Colors.YELLOW)}      {gauss_home}/cron/, sessions/, logs/"
+        f"   {color('Data:', Colors.YELLOW)}      {gauss_home}/sessions/, logs/, memories/"
     )
     print()
 
@@ -938,8 +937,8 @@ def setup_model_provider(config: dict):
         except Exception:
             pass
 
-        # Save provider and base_url to config.yaml so the gateway and CLI
-        # both resolve the correct provider without relying on env-var heuristics.
+        # Save provider and base_url to config.yaml so the CLI and managed
+        # workflow children resolve the correct provider without env heuristics.
         if base_url:
             import yaml
 
@@ -1460,8 +1459,8 @@ def setup_model_provider(config: dict):
             print_success(f"Model set to: {_display}")
 
     # Write provider+base_url to config.yaml only after model selection is complete.
-    # This prevents a race condition where the gateway picks up a new provider
-    # before the model name has been updated to match.
+    # This prevents the runtime from picking up a new provider before the model
+    # name has been updated to match.
     if selected_provider in ("zai", "kimi-coding", "minimax", "minimax-cn", "anthropic") and selected_base_url is not None:
         _update_config_for_provider(selected_provider, selected_base_url)
 
@@ -1930,374 +1929,6 @@ def setup_agent_settings(config: dict):
     save_config(config)
 
 
-# =============================================================================
-# Section 3: Tool Configuration (delegates to unified tools_config.py)
-# =============================================================================
-
-
-def _legacy_setup_gateway(config: dict):
-    """Configure messaging platform integrations."""
-    print_header("Messaging Platforms")
-    print_info("Connect to messaging platforms to chat with Gauss from anywhere.")
-    print()
-
-    # ── Telegram ──
-    existing_telegram = get_env_value("TELEGRAM_BOT_TOKEN")
-    if existing_telegram:
-        print_info("Telegram: already configured")
-        if prompt_yes_no("Reconfigure Telegram?", False):
-            existing_telegram = None
-
-    if not existing_telegram and prompt_yes_no("Set up Telegram bot?", False):
-        print_info("Create a bot via @BotFather on Telegram")
-        token = prompt("Telegram bot token", password=True)
-        if token:
-            save_env_value("TELEGRAM_BOT_TOKEN", token)
-            print_success("Telegram token saved")
-
-            # Allowed users (security)
-            print()
-            print_info("🔒 Security: Restrict who can use your bot")
-            print_info("   To find your Telegram user ID:")
-            print_info("   1. Message @userinfobot on Telegram")
-            print_info("   2. It will reply with your numeric ID (e.g., 123456789)")
-            print()
-            allowed_users = prompt(
-                "Allowed user IDs (comma-separated, leave empty for open access)"
-            )
-            if allowed_users:
-                save_env_value("TELEGRAM_ALLOWED_USERS", allowed_users.replace(" ", ""))
-                print_success(
-                    "Telegram allowlist configured - only listed users can use the bot"
-                )
-            else:
-                print_info(
-                    "⚠️  No allowlist set - anyone who finds your bot can use it!"
-                )
-
-            # Home channel setup with better guidance
-            print()
-            print_info("📬 Home Channel: where Gauss delivers cron job results,")
-            print_info("   cross-platform messages, and notifications.")
-            print_info("   For Telegram DMs, this is your user ID (same as above).")
-
-            first_user_id = allowed_users.split(",")[0].strip() if allowed_users else ""
-            if first_user_id:
-                if prompt_yes_no(
-                    f"Use your user ID ({first_user_id}) as the home channel?", True
-                ):
-                    save_env_value("TELEGRAM_HOME_CHANNEL", first_user_id)
-                    print_success(f"Telegram home channel set to {first_user_id}")
-                else:
-                    home_channel = prompt(
-                        "Home channel ID (or leave empty to set later with /set-home in Telegram)"
-                    )
-                    if home_channel:
-                        save_env_value("TELEGRAM_HOME_CHANNEL", home_channel)
-            else:
-                print_info(
-                    "   You can also set this later by typing /set-home in your Telegram chat."
-                )
-                home_channel = prompt("Home channel ID (leave empty to set later)")
-                if home_channel:
-                    save_env_value("TELEGRAM_HOME_CHANNEL", home_channel)
-
-    # Check/update existing Telegram allowlist
-    elif existing_telegram:
-        existing_allowlist = get_env_value("TELEGRAM_ALLOWED_USERS")
-        if not existing_allowlist:
-            print_info("⚠️  Telegram has no user allowlist - anyone can use your bot!")
-            if prompt_yes_no("Add allowed users now?", True):
-                print_info("   To find your Telegram user ID: message @userinfobot")
-                allowed_users = prompt("Allowed user IDs (comma-separated)")
-                if allowed_users:
-                    save_env_value(
-                        "TELEGRAM_ALLOWED_USERS", allowed_users.replace(" ", "")
-                    )
-                    print_success("Telegram allowlist configured")
-
-    # ── Discord ──
-    existing_discord = get_env_value("DISCORD_BOT_TOKEN")
-    if existing_discord:
-        print_info("Discord: already configured")
-        if prompt_yes_no("Reconfigure Discord?", False):
-            existing_discord = None
-
-    if not existing_discord and prompt_yes_no("Set up Discord bot?", False):
-        print_info("Create a bot at https://discord.com/developers/applications")
-        token = prompt("Discord bot token", password=True)
-        if token:
-            save_env_value("DISCORD_BOT_TOKEN", token)
-            print_success("Discord token saved")
-
-            # Allowed users (security)
-            print()
-            print_info("🔒 Security: Restrict who can use your bot")
-            print_info("   To find your Discord user ID:")
-            print_info("   1. Enable Developer Mode in Discord settings")
-            print_info("   2. Right-click your name → Copy ID")
-            print()
-            print_info(
-                "   You can also use Discord usernames (resolved on gateway start)."
-            )
-            print()
-            allowed_users = prompt(
-                "Allowed user IDs or usernames (comma-separated, leave empty for open access)"
-            )
-            if allowed_users:
-                # Clean up common prefixes (user:123, <@123>, <@!123>)
-                cleaned_ids = []
-                for uid in allowed_users.replace(" ", "").split(","):
-                    uid = uid.strip()
-                    if uid.startswith("<@") and uid.endswith(">"):
-                        uid = uid.lstrip("<@!").rstrip(">")
-                    if uid.lower().startswith("user:"):
-                        uid = uid[5:]
-                    if uid:
-                        cleaned_ids.append(uid)
-                save_env_value("DISCORD_ALLOWED_USERS", ",".join(cleaned_ids))
-                print_success("Discord allowlist configured")
-            else:
-                print_info(
-                    "⚠️  No allowlist set - anyone in servers with your bot can use it!"
-                )
-
-            # Home channel setup with better guidance
-            print()
-            print_info("📬 Home Channel: where Gauss delivers cron job results,")
-            print_info("   cross-platform messages, and notifications.")
-            print_info(
-                "   To get a channel ID: right-click a channel → Copy Channel ID"
-            )
-            print_info("   (requires Developer Mode in Discord settings)")
-            print_info(
-                "   You can also set this later by typing /set-home in a Discord channel."
-            )
-            home_channel = prompt(
-                "Home channel ID (leave empty to set later with /set-home)"
-            )
-            if home_channel:
-                save_env_value("DISCORD_HOME_CHANNEL", home_channel)
-
-    # Check/update existing Discord allowlist
-    elif existing_discord:
-        existing_allowlist = get_env_value("DISCORD_ALLOWED_USERS")
-        if not existing_allowlist:
-            print_info("⚠️  Discord has no user allowlist - anyone can use your bot!")
-            if prompt_yes_no("Add allowed users now?", True):
-                print_info(
-                    "   To find Discord ID: Enable Developer Mode, right-click name → Copy ID"
-                )
-                allowed_users = prompt("Allowed user IDs (comma-separated)")
-                if allowed_users:
-                    # Clean up common prefixes (user:123, <@123>, <@!123>)
-                    cleaned_ids = []
-                    for uid in allowed_users.replace(" ", "").split(","):
-                        uid = uid.strip()
-                        if uid.startswith("<@") and uid.endswith(">"):
-                            uid = uid.lstrip("<@!").rstrip(">")
-                        if uid.lower().startswith("user:"):
-                            uid = uid[5:]
-                        if uid:
-                            cleaned_ids.append(uid)
-                    save_env_value(
-                        "DISCORD_ALLOWED_USERS", ",".join(cleaned_ids)
-                    )
-                    print_success("Discord allowlist configured")
-
-    # ── Slack ──
-    existing_slack = get_env_value("SLACK_BOT_TOKEN")
-    if existing_slack:
-        print_info("Slack: already configured")
-        if prompt_yes_no("Reconfigure Slack?", False):
-            existing_slack = None
-
-    if not existing_slack and prompt_yes_no("Set up Slack bot?", False):
-        print_info("Steps to create a Slack app:")
-        print_info(
-            "   1. Go to https://api.slack.com/apps → Create New App (from scratch)"
-        )
-        print_info("   2. Enable Socket Mode: Settings → Socket Mode → Enable")
-        print_info("      • Create an App-Level Token with 'connections:write' scope")
-        print_info("   3. Add Bot Token Scopes: Features → OAuth & Permissions")
-        print_info("      Required scopes: chat:write, app_mentions:read,")
-        print_info("      channels:history, channels:read, im:history,")
-        print_info("      im:read, im:write, users:read, files:write")
-        print_info("      Optional for private channels: groups:history")
-        print_info("   4. Subscribe to Events: Features → Event Subscriptions → Enable")
-        print_info("      Required events: message.im, message.channels, app_mention")
-        print_info("      Optional for private channels: message.groups")
-        print_warning("   ⚠ Without message.channels the bot will ONLY work in DMs,")
-        print_warning("     not public channels.")
-        print_info("   5. Install to Workspace: Settings → Install App")
-        print_info("   6. Reinstall the app after any scope or event changes")
-        print_info(
-            "   7. After installing, invite the bot to channels: /invite @YourBot"
-        )
-        print()
-        print_info(
-            "   Full guide: https://gauss-agent.nousresearch.com/docs/user-guide/messaging/slack/"
-        )
-        print()
-        bot_token = prompt("Slack Bot Token (xoxb-...)", password=True)
-        if bot_token:
-            save_env_value("SLACK_BOT_TOKEN", bot_token)
-            app_token = prompt("Slack App Token (xapp-...)", password=True)
-            if app_token:
-                save_env_value("SLACK_APP_TOKEN", app_token)
-            print_success("Slack tokens saved")
-
-            print()
-            print_info("🔒 Security: Restrict who can use your bot")
-            print_info(
-                "   To find a Member ID: click a user's name → View full profile → ⋮ → Copy member ID"
-            )
-            print()
-            allowed_users = prompt(
-                "Allowed user IDs (comma-separated, leave empty to deny everyone except paired users)"
-            )
-            if allowed_users:
-                save_env_value("SLACK_ALLOWED_USERS", allowed_users.replace(" ", ""))
-                print_success("Slack allowlist configured")
-            else:
-                print_warning(
-                    "⚠️  No Slack allowlist set - unpaired users will be denied by default."
-                )
-                print_info(
-                    "   Set SLACK_ALLOW_ALL_USERS=true or GATEWAY_ALLOW_ALL_USERS=true only if you intentionally want open workspace access."
-                )
-
-    # ── WhatsApp ──
-    existing_whatsapp = get_env_value("WHATSAPP_ENABLED")
-    if not existing_whatsapp and prompt_yes_no("Set up WhatsApp?", False):
-        print_info("WhatsApp connects via a built-in bridge (Baileys).")
-        print_info(f"Requires Node.js. Run '{get_cli_command_name()} whatsapp' for guided setup.")
-        print()
-        if prompt_yes_no("Enable WhatsApp now?", True):
-            save_env_value("WHATSAPP_ENABLED", "true")
-            print_success("WhatsApp enabled")
-            print_info(f"Run '{get_cli_command_name()} whatsapp' to choose your mode (separate bot number")
-            print_info("or personal self-chat) and pair via QR code.")
-
-    # ── Gateway Service Setup ──
-    any_messaging = (
-        get_env_value("TELEGRAM_BOT_TOKEN")
-        or get_env_value("DISCORD_BOT_TOKEN")
-        or get_env_value("SLACK_BOT_TOKEN")
-        or get_env_value("WHATSAPP_ENABLED")
-    )
-    if any_messaging:
-        print()
-        print_info("━" * 50)
-        print_success("Messaging platforms configured!")
-
-        # Check if any home channels are missing
-        missing_home = []
-        if get_env_value("TELEGRAM_BOT_TOKEN") and not get_env_value(
-            "TELEGRAM_HOME_CHANNEL"
-        ):
-            missing_home.append("Telegram")
-        if get_env_value("DISCORD_BOT_TOKEN") and not get_env_value(
-            "DISCORD_HOME_CHANNEL"
-        ):
-            missing_home.append("Discord")
-        if get_env_value("SLACK_BOT_TOKEN") and not get_env_value("SLACK_HOME_CHANNEL"):
-            missing_home.append("Slack")
-
-        if missing_home:
-            print()
-            print_warning(f"No home channel set for: {', '.join(missing_home)}")
-            print_info("   Without a home channel, cron jobs and cross-platform")
-            print_info("   messages can't be delivered to those platforms.")
-            print_info("   Set one later with /set-home in your chat, or:")
-            for plat in missing_home:
-                print_info(
-                    f"     gauss config set {plat.upper()}_HOME_CHANNEL <channel_id>"
-                )
-
-        # Offer to install the gateway as a system service
-        import platform as _platform
-
-        _is_linux = _platform.system() == "Linux"
-        _is_macos = _platform.system() == "Darwin"
-
-        from gauss_cli.gateway import (
-            _is_service_installed,
-            _is_service_running,
-            has_conflicting_systemd_units,
-            install_linux_gateway_from_setup,
-            print_systemd_scope_conflict_warning,
-            systemd_start,
-            systemd_restart,
-            launchd_install,
-            launchd_start,
-            launchd_restart,
-        )
-
-        service_installed = _is_service_installed()
-        service_running = _is_service_running()
-
-        print()
-        if _is_linux and has_conflicting_systemd_units():
-            print_systemd_scope_conflict_warning()
-            print()
-
-        if service_running:
-            if prompt_yes_no("  Restart the gateway to pick up changes?", True):
-                try:
-                    if _is_linux:
-                        systemd_restart()
-                    elif _is_macos:
-                        launchd_restart()
-                except Exception as e:
-                    print_error(f"  Restart failed: {e}")
-        elif service_installed:
-            if prompt_yes_no("  Start the gateway service?", True):
-                try:
-                    if _is_linux:
-                        systemd_start()
-                    elif _is_macos:
-                        launchd_start()
-                except Exception as e:
-                    print_error(f"  Start failed: {e}")
-        elif _is_linux or _is_macos:
-            svc_name = "systemd" if _is_linux else "launchd"
-            if prompt_yes_no(
-                f"  Install the gateway as a {svc_name} service? (runs in background, starts on boot)",
-                True,
-            ):
-                try:
-                    installed_scope = None
-                    did_install = False
-                    if _is_linux:
-                        installed_scope, did_install = install_linux_gateway_from_setup(force=False)
-                    else:
-                        launchd_install(force=False)
-                        did_install = True
-                    print()
-                    if did_install and prompt_yes_no("  Start the service now?", True):
-                        try:
-                            if _is_linux:
-                                systemd_start(system=installed_scope == "system")
-                            elif _is_macos:
-                                launchd_start()
-                        except Exception as e:
-                            print_error(f"  Start failed: {e}")
-                except Exception as e:
-                    print_error(f"  Install failed: {e}")
-                    print_info("  You can try manually: gauss gateway install")
-            else:
-                print_info("  You can install later: gauss gateway install")
-                if _is_linux:
-                    print_info("  Or as a boot-time service: sudo gauss gateway install --system")
-                print_info("  Or run in foreground:  gauss gateway")
-        else:
-            print_info("Start the gateway to bring your bots online:")
-            print_info(f"   {get_cli_command_name()} gateway              # Run in foreground")
-
-        print_info("━" * 50)
-
-
 def setup_tools(config: dict, first_install: bool = False):
     """Configure tools — delegates to the unified tools_command() in tools_config.py.
 
@@ -2311,116 +1942,6 @@ def setup_tools(config: dict, first_install: bool = False):
     from gauss_cli.tools_config import tools_command
 
     tools_command(first_install=first_install, config=config)
-
-
-# =============================================================================
-# OpenClaw Migration
-# =============================================================================
-
-
-_OPENCLAW_SCRIPT = (
-    PROJECT_ROOT
-    / "optional-skills"
-    / "migration"
-    / "openclaw-migration"
-    / "scripts"
-    / "openclaw_to_gauss.py"
-)
-
-
-def _offer_openclaw_migration(gauss_home: Path) -> bool:
-    """Detect ~/.openclaw and offer to migrate during first-time setup.
-
-    Returns True if migration ran successfully, False otherwise.
-    """
-    openclaw_dir = Path.home() / ".openclaw"
-    if not openclaw_dir.is_dir():
-        return False
-
-    if not _OPENCLAW_SCRIPT.exists():
-        return False
-
-    print()
-    print_header("OpenClaw Installation Detected")
-    print_info(f"Found OpenClaw data at {openclaw_dir}")
-    print_info("Gauss can import your settings, memories, skills, and API keys.")
-    print()
-
-    if not prompt_yes_no("Would you like to import from OpenClaw?", default=True):
-        print_info(
-            "Skipping migration. You can run it later via the openclaw-migration skill."
-        )
-        return False
-
-    # Ensure config.yaml exists before migration tries to read it
-    config_path = get_config_path()
-    if not config_path.exists():
-        save_config(load_config())
-
-    # Dynamically load the migration script
-    try:
-        spec = importlib.util.spec_from_file_location(
-            "openclaw_to_gauss", _OPENCLAW_SCRIPT
-        )
-        if spec is None or spec.loader is None:
-            print_warning("Could not load migration script.")
-            return False
-
-        mod = importlib.util.module_from_spec(spec)
-        # Register in sys.modules so @dataclass can resolve the module
-        # (Python 3.11+ requires this for dynamically loaded modules)
-        import sys as _sys
-        _sys.modules[spec.name] = mod
-        try:
-            spec.loader.exec_module(mod)
-        except Exception:
-            _sys.modules.pop(spec.name, None)
-            raise
-
-        # Run migration with the "full" preset, execute mode, no overwrite
-        selected = mod.resolve_selected_options(None, None, preset="full")
-        migrator = mod.Migrator(
-            source_root=openclaw_dir.resolve(),
-            target_root=gauss_home.resolve(),
-            execute=True,
-            workspace_target=None,
-            overwrite=False,
-            migrate_secrets=True,
-            output_dir=None,
-            selected_options=selected,
-            preset_name="full",
-        )
-        report = migrator.migrate()
-    except Exception as e:
-        print_warning(f"Migration failed: {e}")
-        logger.debug("OpenClaw migration error", exc_info=True)
-        return False
-
-    # Print summary
-    summary = report.get("summary", {})
-    migrated = summary.get("migrated", 0)
-    skipped = summary.get("skipped", 0)
-    conflicts = summary.get("conflict", 0)
-    errors = summary.get("error", 0)
-
-    print()
-    if migrated:
-        print_success(f"Imported {migrated} item(s) from OpenClaw.")
-    if conflicts:
-        print_info(f"Skipped {conflicts} item(s) that already exist in Gauss.")
-    if skipped:
-        print_info(f"Skipped {skipped} item(s) (not found or unchanged).")
-    if errors:
-        print_warning(f"{errors} item(s) had errors — check the migration report.")
-
-    output_dir = report.get("output_dir")
-    if output_dir:
-        print_info(f"Full report saved to: {output_dir}")
-
-    print_success("Migration complete! Continuing with setup...")
-    return True
-
-
 # =============================================================================
 # Main Wizard Orchestrator
 # =============================================================================
@@ -2594,11 +2115,6 @@ def run_setup_wizard(args):
         except (KeyboardInterrupt, EOFError):
             print()
             return
-
-        # Offer OpenClaw migration before configuration begins
-        if _offer_openclaw_migration(gauss_home):
-            # Reload config in case migration wrote to it
-            config = load_config()
 
     # ── Full Setup — run all sections ──
     print_header("Configuration Location")

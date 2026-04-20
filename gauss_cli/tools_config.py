@@ -90,12 +90,6 @@ _DEFAULT_OFF_TOOLSETS = set()
 # Platform display config
 PLATFORMS = {
     "cli":      {"label": "🖥️  CLI",       "default_toolset": "gauss-cli"},
-    "telegram": {"label": "📱 Telegram",   "default_toolset": "gauss-telegram"},
-    "discord":  {"label": "💬 Discord",    "default_toolset": "gauss-discord"},
-    "slack":    {"label": "💼 Slack",      "default_toolset": "gauss-slack"},
-    "whatsapp": {"label": "📱 WhatsApp",   "default_toolset": "gauss-whatsapp"},
-    "signal":   {"label": "📡 Signal",     "default_toolset": "gauss-signal"},
-    "email":    {"label": "📧 Email",      "default_toolset": "gauss-email"},
 }
 
 
@@ -181,17 +175,8 @@ def _run_post_setup(post_setup_key: str):
 # ─── Platform / Toolset Helpers ───────────────────────────────────────────────
 
 def _get_enabled_platforms() -> List[str]:
-    """Return platform keys that are configured (have tokens or are CLI)."""
-    enabled = ["cli"]
-    if get_env_value("TELEGRAM_BOT_TOKEN"):
-        enabled.append("telegram")
-    if get_env_value("DISCORD_BOT_TOKEN"):
-        enabled.append("discord")
-    if get_env_value("SLACK_BOT_TOKEN"):
-        enabled.append("slack")
-    if get_env_value("WHATSAPP_ENABLED"):
-        enabled.append("whatsapp")
-    return enabled
+    """Return the retained platform keys for the contracted repo."""
+    return ["cli"]
 
 
 def _platform_toolset_summary(config: dict, platforms: Optional[List[str]] = None) -> Dict[str, Set[str]]:
@@ -869,5 +854,5 @@ def tools_command(args=None, first_install: bool = False, config: dict = None):
 
     print()
     print(color("  Tool configuration saved to ~/.gauss/config.yaml", Colors.DIM))
-    print(color("  Changes take effect on next 'gauss' or gateway restart.", Colors.DIM))
+    print(color("  Changes take effect on the next 'gauss' run.", Colors.DIM))
     print()

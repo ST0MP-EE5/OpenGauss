@@ -96,7 +96,7 @@ class TestCLIStatusBar:
 
         text = cli_obj._build_status_bar_text(width=60)
 
-        assert "@" in text
+        assert "proj:GaussWorkspace" in text
         assert "$0.06" not in text  # cost hidden by default
         assert "15m" in text
         assert "200K" not in text
@@ -106,7 +106,7 @@ class TestCLIStatusBar:
 
         text = cli_obj._build_status_bar_text(width=100)
 
-        assert "@" in text
+        assert "proj:GaussWorkspace" in text
         assert "claude-sonnet-4-20250514" in text
 
 

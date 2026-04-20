@@ -15,30 +15,6 @@ PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-OPTIONAL_TEST_PREFIXES = (
-    "tests/acp",
-    "tests/gateway",
-)
-OPTIONAL_TEST_FILES = {
-    "tests/tools/test_transcription.py",
-    "tests/tools/test_transcription_tools.py",
-}
-LEGACY_TEST_FILES = {
-    "tests/gauss_cli/test_doctor.py",
-    "tests/gauss_cli/test_setup_openclaw_migration.py",
-    "tests/gauss_cli/test_update_check.py",
-    "tests/test_cli_status_bar.py",
-    "tests/test_model_tools.py",
-    "tests/tools/test_delegate.py",
-    "tests/tools/test_mcp_tool.py",
-}
-
-
-def _flag_enabled(name: str) -> bool:
-    value = str(os.getenv(name, "") or "").strip().lower()
-    return value in {"1", "true", "yes", "on"}
-
-
 def _relative_repo_path(path: object) -> str:
     try:
         resolved = Path(str(path)).resolve()
@@ -54,37 +30,7 @@ def _test_surface(path: object) -> str | None:
     relative = _relative_repo_path(path)
     if not relative.startswith("tests/"):
         return None
-    if any(relative == prefix or relative.startswith(f"{prefix}/") for prefix in OPTIONAL_TEST_PREFIXES):
-        return "optional"
-    if relative in OPTIONAL_TEST_FILES:
-        return "optional"
-    if relative in LEGACY_TEST_FILES:
-        return "legacy"
     return "core"
-
-
-def pytest_addoption(parser):
-    parser.addoption(
-        "--run-optional",
-        action="store_true",
-        default=_flag_enabled("GAUSS_RUN_OPTIONAL_TESTS"),
-        help="Collect and run optional non-core test surfaces (ACP, gateway, voice/transcription).",
-    )
-    parser.addoption(
-        "--run-legacy",
-        action="store_true",
-        default=_flag_enabled("GAUSS_RUN_LEGACY_TESTS"),
-        help="Collect and run legacy or experimental non-core test surfaces.",
-    )
-
-
-def pytest_ignore_collect(collection_path, config):
-    surface = _test_surface(collection_path)
-    if surface == "optional" and not config.getoption("run_optional"):
-        return True
-    if surface == "legacy" and not config.getoption("run_legacy"):
-        return True
-    return False
 
 
 def pytest_collection_modifyitems(config, items):
@@ -101,9 +47,9 @@ def _isolate_gauss_home(tmp_path, monkeypatch):
     fake_home = tmp_path / "gauss_test"
     fake_home.mkdir()
     (fake_home / "sessions").mkdir()
-    (fake_home / "cron").mkdir()
     (fake_home / "memories").mkdir()
     (fake_home / "skills").mkdir()
+    (fake_home / "logs").mkdir()
     monkeypatch.setenv("GAUSS_HOME", str(fake_home))
     # Reset plugin singleton so tests don't leak plugins from ~/.gauss/plugins/
     try:

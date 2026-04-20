@@ -1,6 +1,7 @@
 """Tests for the update check mechanism in gauss_cli.banner."""
 
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -72,6 +73,7 @@ def test_check_for_updates_no_git_dir(tmp_path):
     try:
         banner.__file__ = str(fake_banner)
         with patch.dict("os.environ", {"GAUSS_HOME": str(tmp_path)}, clear=False):
+            os.environ.pop("GAUSS_INSTALL_ROOT", None)
             with patch("gauss_cli.banner.subprocess.run") as mock_run:
                 result = banner.check_for_updates()
         assert result is None

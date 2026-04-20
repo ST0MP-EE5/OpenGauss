@@ -35,7 +35,6 @@ class TestEnsureGaussHome:
     def test_creates_subdirs(self, tmp_path):
         with patch.dict(os.environ, {"GAUSS_HOME": str(tmp_path)}):
             ensure_gauss_home()
-            assert (tmp_path / "cron").is_dir()
             assert (tmp_path / "sessions").is_dir()
             assert (tmp_path / "logs").is_dir()
             assert (tmp_path / "memories").is_dir()

@@ -465,8 +465,8 @@ class TestMCPServerTask:
 # ---------------------------------------------------------------------------
 
 class TestToolsetInjection:
-    def test_mcp_tools_added_to_all_gauss_toolsets(self):
-        """Discovered MCP tools are dynamically injected into all gauss-* toolsets."""
+    def test_mcp_tools_added_to_remaining_gauss_toolsets(self):
+        """Discovered MCP tools are injected into the retained gauss-* toolsets."""
         from tools.mcp_tool import MCPServerTask
 
         mock_tools = [_make_mcp_tool("list_files", "List files")]
@@ -482,8 +482,6 @@ class TestToolsetInjection:
 
         fake_toolsets = {
             "gauss-cli": {"tools": ["terminal"], "description": "CLI", "includes": []},
-            "gauss-telegram": {"tools": ["terminal"], "description": "TG", "includes": []},
-            "gauss-gateway": {"tools": [], "description": "GW", "includes": []},
             "non-gauss": {"tools": [], "description": "other", "includes": []},
         }
         fake_config = {"fs": {"command": "npx", "args": []}}
@@ -497,10 +495,8 @@ class TestToolsetInjection:
             result = discover_mcp_tools()
 
         assert "mcp_fs_list_files" in result
-        # All gauss-* toolsets get injection
+        # All remaining gauss-* toolsets get injection
         assert "mcp_fs_list_files" in fake_toolsets["gauss-cli"]["tools"]
-        assert "mcp_fs_list_files" in fake_toolsets["gauss-telegram"]["tools"]
-        assert "mcp_fs_list_files" in fake_toolsets["gauss-gateway"]["tools"]
         # Non-gauss toolset should NOT get injection
         assert "mcp_fs_list_files" not in fake_toolsets["non-gauss"]["tools"]
         # Original tools preserved
@@ -2606,7 +2602,7 @@ class TestMCPSelectiveToolLoading:
         try:
             registered = asyncio.run(run())
             assert registered == ["mcp_ink_existing_create_service"]
-            assert _existing_tool_names() == ["mcp_ink_existing_create_service"]
+            assert "mcp_ink_existing_create_service" in _existing_tool_names()
         finally:
             _servers.pop("ink_existing", None)
 

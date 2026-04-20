@@ -797,13 +797,11 @@ prepare_gauss_home() {
     log_info "Preparing $GAUSS_HOME..."
     mkdir -p \
         "$GAUSS_HOME" \
-        "$GAUSS_HOME/cron" \
         "$GAUSS_HOME/sessions" \
         "$GAUSS_HOME/logs" \
         "$GAUSS_HOME/memories" \
         "$GAUSS_HOME/skills" \
         "$GAUSS_HOME/skins" \
-        "$GAUSS_HOME/whatsapp/session" \
         "$GUIDE_DIR"
     chmod 700 "$GAUSS_HOME" || true
 
@@ -922,7 +920,7 @@ PY
     if [ -d "$WORKSPACE_DIR" ]; then
         "$GAUSS_BIN" config set terminal.cwd "$WORKSPACE_DIR"
     fi
-    "$GAUSS_BIN" config set gauss.autoformalize.backend claude-code
+    "$GAUSS_BIN" config set gauss.autoformalize.backend forge
     "$GAUSS_BIN" config set gauss.autoformalize.auth_mode auto
     "$GAUSS_BIN" config set agent.max_turns 90
 
@@ -1008,7 +1006,7 @@ helper_dir.mkdir(parents=True, exist_ok=True)
 guide_dir.mkdir(parents=True, exist_ok=True)
 
 readme = (repo_root / "README.md").read_text(encoding="utf-8")
-start_here_doc = repo_root / "website/docs/getting-started/start-here.md"
+start_here_doc = repo_root / "docs/getting-started/start-here.md"
 repo_head = subprocess.check_output(
     ["git", "-C", str(repo_root), "rev-parse", "--short=12", "HEAD"],
     text=True,
@@ -1351,14 +1349,14 @@ case "$provider" in
     ;;
 esac
 """,
-    "gauss-use-claude-backend": """#!/usr/bin/env bash
+    "gauss-use-forge-backend": """#!/usr/bin/env bash
 set -euo pipefail
 GAUSS_HOME="${GAUSS_HOME:-__GAUSS_HOME__}"
 REPO_ROOT="${GAUSS_REPO_ROOT:-__REPO_ROOT__}"
 export GAUSS_HOME
 export PATH="$HOME/.local/bin:$REPO_ROOT/venv/bin:$HOME/.elan/bin:$PATH"
-gauss config set gauss.autoformalize.backend claude-code
-printf '%s\\n' 'Gauss managed backend set to claude-code.'
+gauss config set gauss.autoformalize.backend forge
+printf '%s\\n' 'Gauss managed backend set to forge.'
 """,
     "gauss-use-codex-backend": """#!/usr/bin/env bash
 set -euo pipefail
@@ -1378,16 +1376,6 @@ export PATH="$HOME/.local/bin:$REPO_ROOT/venv/bin:$HOME/.elan/bin:$PATH"
 gauss config set gauss.autoformalize.auth_mode auto
 printf '%s\\n' 'Gauss auth mode set to auto.'
 """,
-    "gauss-use-claude-login": """#!/usr/bin/env bash
-set -euo pipefail
-GAUSS_HOME="${GAUSS_HOME:-__GAUSS_HOME__}"
-REPO_ROOT="${GAUSS_REPO_ROOT:-__REPO_ROOT__}"
-export GAUSS_HOME
-export PATH="$HOME/.local/bin:$REPO_ROOT/venv/bin:$HOME/.elan/bin:$PATH"
-gauss config set gauss.autoformalize.backend claude-code
-gauss config set gauss.autoformalize.auth_mode login
-exec claude auth login
-""",
     "gauss-use-codex-login": """#!/usr/bin/env bash
 set -euo pipefail
 GAUSS_HOME="${GAUSS_HOME:-__GAUSS_HOME__}"
@@ -1397,22 +1385,6 @@ export PATH="$HOME/.local/bin:$REPO_ROOT/venv/bin:$HOME/.elan/bin:$PATH"
 gauss config set gauss.autoformalize.backend codex
 gauss config set gauss.autoformalize.auth_mode login
 exec codex login
-""",
-    "gauss-use-anthropic-key": """#!/usr/bin/env bash
-set -euo pipefail
-GAUSS_HOME="${GAUSS_HOME:-__GAUSS_HOME__}"
-REPO_ROOT="${GAUSS_REPO_ROOT:-__REPO_ROOT__}"
-export GAUSS_HOME
-export PATH="$HOME/.local/bin:$REPO_ROOT/venv/bin:$HOME/.elan/bin:$PATH"
-if ! [ -f "$GAUSS_HOME/.env" ] || ! grep -Eq '^ANTHROPIC_API_KEY=|^ANTHROPIC_TOKEN=' "$GAUSS_HOME/.env"; then
-  printf '%s\\n' 'No ANTHROPIC_API_KEY or ANTHROPIC_TOKEN found in ~/.gauss/.env.' >&2
-  exit 1
-fi
-gauss config set gauss.autoformalize.backend claude-code
-gauss config set gauss.autoformalize.auth_mode api-key
-provider_status="$(gauss-configure-main-provider anthropic)"
-printf '%s\\n' 'Gauss managed backend set to claude-code with api-key auth.'
-printf '%s\\n' "$provider_status"
 """,
     "gauss-use-openrouter-key": """#!/usr/bin/env bash
 set -euo pipefail
@@ -1485,7 +1457,7 @@ Commit: $(git -C "$REPO_ROOT" rev-parse --short=12 HEAD 2>/dev/null || printf 'u
 Lean project: $WORKSPACE_DIR
 Guide: __GUIDE_PATH__
 Gauss project manifest: initialized
-Managed backend: claude-code
+Managed backend: forge
 Main chat: ${main_chat_status}
 
 Start here:
