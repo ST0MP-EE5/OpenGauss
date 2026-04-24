@@ -97,6 +97,24 @@ def test_prepare_task_workspace_emits_challenge_and_solution(tmp_path: Path):
     assert 'name = "Solution"' in lakefile
 
 
+def test_extract_theorem_names_uses_namespace_prefix(tmp_path: Path):
+    challenge_path = tmp_path / "Challenge.lean"
+    challenge_path.write_text(
+        "\n".join(
+            [
+                "namespace JordanCycleTheorem",
+                "namespace Inner",
+                "theorem MainTheorem : True := by trivial",
+                "end Inner",
+                "end JordanCycleTheorem",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert fq._extract_theorem_names(challenge_path) == ["JordanCycleTheorem.Inner.MainTheorem"]
+
+
 def test_run_one_task_requires_comparator_success(monkeypatch, tmp_path: Path):
     cached_repo = tmp_path / "formalqualbench-cache"
     cached_repo.mkdir(parents=True)
@@ -140,7 +158,7 @@ def test_run_one_task_requires_comparator_success(monkeypatch, tmp_path: Path):
     )
 
     assert result["task_name"] == "JordanCycleTheorem"
-    assert result["theorem_names"] == ["MainTheorem"]
+    assert result["theorem_names"] == ["JordanCycleTheorem.MainTheorem"]
     assert result["lake_build_returncode"] == 0
     assert result["comparator_returncode"] == 1
     assert result["comparator_valid"] is False
@@ -149,7 +167,7 @@ def test_run_one_task_requires_comparator_success(monkeypatch, tmp_path: Path):
     assert Path(result["solution_path"]).is_file()
     assert Path(result["comparator_config_path"]).is_file()
     comparator_payload = json.loads(Path(result["comparator_config_path"]).read_text(encoding="utf-8"))
-    assert comparator_payload["theorem_names"] == ["MainTheorem"]
+    assert comparator_payload["theorem_names"] == ["JordanCycleTheorem.MainTheorem"]
 
 
 def test_evaluate_config_writes_summary_with_call_counts_and_artifacts(monkeypatch, tmp_path: Path):

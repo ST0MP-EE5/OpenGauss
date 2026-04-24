@@ -596,11 +596,32 @@ def _build_backend_instruction(config: EvalConfig, task_name: str, theorem_hint:
 
 
 def _extract_theorem_names(challenge_path: Path) -> list[str]:
-    content = challenge_path.read_text(encoding="utf-8")
-    matches = re.findall(r"\b(?:theorem|lemma)\s+([A-Za-z0-9_']+)", content)
-    if not matches:
-        raise RuntimeError(f"Could not find theorem name in {challenge_path}")
-    return [matches[0]]
+    namespace_stack: list[str] = []
+    for line in challenge_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        namespace_match = re.match(r"namespace\s+([A-Za-z0-9_'.]+)\b", stripped)
+        if namespace_match:
+            namespace_stack.extend(part for part in namespace_match.group(1).split(".") if part)
+            continue
+
+        theorem_match = re.match(r"(?:theorem|lemma)\s+([A-Za-z0-9_'.]+)\b", stripped)
+        if theorem_match:
+            theorem_name = theorem_match.group(1)
+            if "." in theorem_name:
+                return [theorem_name.removeprefix("_root_.")]
+            return [".".join([*namespace_stack, theorem_name]) if namespace_stack else theorem_name]
+
+        end_match = re.match(r"end(?:\s+([A-Za-z0-9_'.]+))?\b", stripped)
+        if end_match and namespace_stack:
+            end_name = end_match.group(1)
+            if end_name:
+                for _ in [part for part in end_name.split(".") if part]:
+                    if namespace_stack:
+                        namespace_stack.pop()
+            else:
+                namespace_stack.pop()
+
+    raise RuntimeError(f"Could not find theorem name in {challenge_path}")
 
 
 def _write_json(path: Path, payload: Any) -> Path:
