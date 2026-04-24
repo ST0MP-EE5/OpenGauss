@@ -397,12 +397,15 @@ def _ensure_git_checkout(repo_url: str, revision: str, destination: Path) -> Pat
         return destination
     if destination.exists():
         shutil.rmtree(destination)
-    result = _run_checked(
-        ["git", "clone", "--depth", "1", "--branch", revision, repo_url, str(destination)],
-        cwd=destination.parent,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"Failed to clone {repo_url}: {result.stderr or result.stdout}")
+    clone = _run_checked(["git", "clone", "--no-checkout", repo_url, str(destination)], cwd=destination.parent)
+    if clone.returncode != 0:
+        raise RuntimeError(f"Failed to clone {repo_url}: {clone.stderr or clone.stdout}")
+    fetch = _run_checked(["git", "-C", str(destination), "fetch", "--depth", "1", "origin", revision], cwd=destination.parent)
+    if fetch.returncode != 0:
+        raise RuntimeError(f"Failed to fetch {revision} from {repo_url}: {fetch.stderr or fetch.stdout}")
+    checkout = _run_checked(["git", "-C", str(destination), "checkout", "--force", "FETCH_HEAD"], cwd=destination.parent)
+    if checkout.returncode != 0:
+        raise RuntimeError(f"Failed to checkout {revision} from {repo_url}: {checkout.stderr or checkout.stdout}")
     return destination
 
 
