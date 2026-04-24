@@ -61,6 +61,22 @@ def _apply_doctor_tool_availability_overrides(available: list[str], unavailable:
     return available, unavailable
 
 
+def _detect_agent_browser_runtime() -> tuple[bool, str]:
+    """Report whether browser automation can resolve an agent-browser entrypoint."""
+    global_bin = shutil.which("agent-browser")
+    if global_bin:
+        return True, "(browser automation, global install)"
+
+    local_bin = PROJECT_ROOT / "node_modules" / ".bin" / "agent-browser"
+    if local_bin.exists():
+        return True, "(browser automation, local install)"
+
+    if shutil.which("npx"):
+        return True, "(browser automation via npx fallback)"
+
+    return False, "(run: npm install, npm install -g agent-browser, or install Node.js with npx)"
+
+
 def check_ok(text: str, detail: str = ""):
     print(f"  {color('✓', Colors.GREEN)} {text}" + (f" {color(detail, Colors.DIM)}" if detail else ""))
 
@@ -222,15 +238,11 @@ def _check_managed_workflow_requirements(
     try:
         from gauss_cli.autoformalize import (
             CODEX_AUTOFORMALIZE_BACKEND,
-            DEFAULT_AUTOFORMALIZE_BACKEND,
             _codex_auth_payload_has_api_key,
             _codex_auth_payload_is_valid,
-            _has_local_claude_api_key,
-            _has_local_claude_login,
             _load_local_codex_auth_payload,
             _resolve_auth_mode,
             _resolve_backend_name,
-            _resolve_claude_auth_env,
             _resolve_codex_api_key,
             _resolve_uv_runner,
         )
@@ -242,8 +254,8 @@ def _check_managed_workflow_requirements(
         )
     except Exception as exc:
         print()
-        print(color("◆ Managed Lean Workflows", Colors.CYAN, Colors.BOLD))
-        check_warn("Managed workflow diagnostics unavailable", f"({exc})")
+        print(color("◆ Native Lean Workflow", Colors.CYAN, Colors.BOLD))
+        check_warn("Lean workflow diagnostics unavailable", f"({exc})")
         return
 
     from gauss_cli.config import load_config
@@ -253,18 +265,20 @@ def _check_managed_workflow_requirements(
     resolved_config = config if isinstance(config, Mapping) else load_config()
 
     print()
-    print(color("◆ Managed Lean Workflows", Colors.CYAN, Colors.BOLD))
+    print(color("◆ Native Lean Workflow", Colors.CYAN, Colors.BOLD))
 
     try:
         backend_name = _resolve_backend_name(resolved_config, environment)
         auth_mode = _resolve_auth_mode(resolved_config, environment)
     except Exception as exc:
-        check_fail("Managed workflow config", f"({exc})")
+        check_fail("Lean workflow config", f"({exc})")
         issues.append(f"Fix gauss.autoformalize config: {exc}")
         return
 
-    check_ok("Managed backend", f"({backend_name})")
-    check_ok("Managed auth mode", f"({auth_mode})")
+    check_ok("Native workflow backend", "(openai-codex)")
+    check_ok("Native workflow model", "(gpt-5.5)")
+    check_ok("Legacy adapter backend", f"({backend_name})")
+    check_ok("Legacy adapter auth mode", f"({auth_mode})")
 
     template_source = resolve_template_source(resolved_config, environment)
     if template_source:
@@ -280,13 +294,13 @@ def _check_managed_workflow_requirements(
         check_ok("uv / uvx", f"({Path(uv_runner[0]).name})")
     except Exception as exc:
         check_fail("uv / uvx", f"({exc})")
-        issues.append("Install uv so Gauss can launch the managed Lean MCP server")
+        issues.append("Install uv if you need the legacy Lean MCP adapter")
 
     lake_executable = shutil.which("lake", path=environment.get("PATH"))
     if lake_executable:
         check_ok("Lean toolchain (lake)", f"({lake_executable})")
     else:
-        check_fail("Lean toolchain (lake)", "(required for managed Lean workflows)")
+        check_fail("Lean toolchain (lake)", "(required for native Lean workflows)")
         issues.append("Install elan / Lean so `lake` is available on PATH")
 
     active_dir = Path(active_cwd or environment.get("TERMINAL_CWD") or os.getcwd()).expanduser().resolve()
@@ -305,53 +319,9 @@ def _check_managed_workflow_requirements(
             issues.append(f"Repair the active Gauss project manifest: {exc}")
     else:
         check_fail("Active working directory", f"({active_dir} does not exist)")
-        issues.append(f"Fix the managed workflow working directory: {active_dir}")
+        issues.append(f"Fix the Lean workflow working directory: {active_dir}")
 
     real_home = Path(environment.get("HOME", str(Path.home()))).expanduser().resolve()
-
-    if backend_name == DEFAULT_AUTOFORMALIZE_BACKEND:
-        claude_executable = shutil.which("claude", path=environment.get("PATH"))
-        if claude_executable:
-            check_ok("Claude Code CLI", f"({claude_executable})")
-        else:
-            check_fail("Claude Code CLI", "(install with `npm install -g @anthropic-ai/claude-code`)")
-            issues.append("Install the Claude Code CLI for managed Lean workflows")
-
-        has_local_login = _has_local_claude_login(real_home)
-        has_local_api_key = _has_local_claude_api_key(real_home)
-        staged_auth_env = _resolve_claude_auth_env(environment, include_persisted_env=True)
-        staged_keys = ", ".join(sorted(staged_auth_env))
-
-        if auth_mode == "auto":
-            if has_local_login:
-                check_ok("Claude auth", "(local Claude login)")
-            elif has_local_api_key:
-                check_ok("Claude auth", "(local Claude API key)")
-            elif staged_auth_env:
-                check_ok("Claude auth", f"(staged via {staged_keys})")
-            else:
-                check_fail("Claude auth", "(not found)")
-                issues.append(
-                    "Run `claude auth login`, save `ANTHROPIC_API_KEY`, or set `gauss.autoformalize.auth_mode: login`"
-                )
-        elif auth_mode == "login":
-            if has_local_login:
-                check_ok("Claude auth", "(local Claude login)")
-            elif has_local_api_key:
-                check_warn("Claude auth", "(login mode ignores local Claude API keys; first launch will prompt)")
-            else:
-                check_warn("Claude auth", "(login mode will prompt on first launch)")
-        else:
-            if staged_auth_env:
-                check_ok("Claude API-key auth", f"(staged via {staged_keys})")
-            elif has_local_api_key:
-                check_ok("Claude API-key auth", "(local Claude API key)")
-            else:
-                check_fail("Claude API-key auth", "(not found)")
-                issues.append(
-                    "Save `ANTHROPIC_API_KEY` / `ANTHROPIC_TOKEN` / `CLAUDE_CODE_OAUTH_TOKEN`, or switch `gauss.autoformalize.auth_mode` back to `auto` or `login`"
-                )
-        return
 
     if backend_name == CODEX_AUTOFORMALIZE_BACKEND:
         codex_executable = shutil.which("codex", path=environment.get("PATH"))
@@ -359,7 +329,7 @@ def _check_managed_workflow_requirements(
             check_ok("Codex CLI", f"({codex_executable})")
         else:
             check_fail("Codex CLI", "(install the OpenAI Codex CLI)")
-            issues.append("Install the OpenAI Codex CLI for managed Lean workflows")
+            issues.append("Install the OpenAI Codex CLI for Codex auth setup")
 
         local_auth_payload = _load_local_codex_auth_payload(real_home, environment)
         has_local_auth = _codex_auth_payload_is_valid(local_auth_payload)
@@ -729,12 +699,11 @@ def run_doctor(args):
     # Node.js + agent-browser (for browser automation tools)
     if shutil.which("node"):
         check_ok("Node.js")
-        # Check if agent-browser is installed
-        agent_browser_path = PROJECT_ROOT / "node_modules" / "agent-browser"
-        if agent_browser_path.exists():
-            check_ok("agent-browser (Node.js)", "(browser automation)")
+        agent_browser_ready, agent_browser_detail = _detect_agent_browser_runtime()
+        if agent_browser_ready:
+            check_ok("agent-browser (Node.js)", agent_browser_detail)
         else:
-            check_warn("agent-browser not installed", "(run: npm install)")
+            check_warn("agent-browser not installed", agent_browser_detail)
     else:
         check_warn("Node.js not found", "(optional, needed for browser tools)")
     

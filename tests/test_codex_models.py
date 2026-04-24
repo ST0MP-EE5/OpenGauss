@@ -28,7 +28,8 @@ def test_get_codex_model_ids_prioritizes_default_and_cache(tmp_path, monkeypatch
 
     models = get_codex_model_ids()
 
-    assert models[0] == "gpt-5.2-codex"
+    assert models[0] == "gpt-5.5"
+    assert "gpt-5.2-codex" in models
     assert "gpt-5.1-codex" in models
     assert "gpt-5.3-codex" in models
     # Non-codex-suffixed models are included when the cache says they're available
@@ -64,7 +65,7 @@ def test_get_codex_model_ids_adds_forward_compat_models_from_templates(monkeypat
 
     models = get_codex_model_ids(access_token="codex-access-token")
 
-    assert models == ["gpt-5.2-codex", "gpt-5.3-codex", "gpt-5.4", "gpt-5.3-codex-spark"]
+    assert models == ["gpt-5.5", "gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex", "gpt-5.3-codex-spark"]
 
 
 def test_model_command_uses_runtime_access_token_for_codex_list(monkeypatch):
@@ -210,15 +211,15 @@ class TestNormalizeModelForProvider:
         assert cli._model_is_default is True
         with patch(
             "gauss_cli.codex_models.get_codex_model_ids",
-            return_value=["gpt-5.3-codex", "gpt-5.4"],
+            return_value=["gpt-5.5", "gpt-5.4", "gpt-5.3-codex"],
         ):
             changed = cli._normalize_model_for_provider("openai-codex")
         assert changed is True
         # Uses first from available list
-        assert cli.model == "gpt-5.3-codex"
+        assert cli.model == "gpt-5.5"
 
     def test_default_fallback_when_api_fails(self):
-        """Default model falls back to gpt-5.3-codex when API unreachable."""
+        """Default model falls back to gpt-5.5 when API unreachable."""
         import cli as _cli_mod
         _clean_config = {
             "model": {
@@ -244,4 +245,4 @@ class TestNormalizeModelForProvider:
         ):
             changed = cli._normalize_model_for_provider("openai-codex")
         assert changed is True
-        assert cli.model == "gpt-5.3-codex"
+        assert cli.model == "gpt-5.5"

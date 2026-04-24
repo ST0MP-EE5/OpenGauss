@@ -3,7 +3,7 @@
 OpenGauss is now maintained as a Lean/FormalQual workspace, not as a broad multi-surface agent platform. Changes should support one of these areas:
 
 - Lean project/runtime flow
-- managed `forge` or `codex` backend staging
+- native OpenGauss Lean workflows
 - FormalQualBench evaluation
 - auth/runtime bridge and environment substrate for those flows
 - installer and local operating documentation
@@ -58,7 +58,7 @@ Installer work should keep the default path focused on:
 
 - local CLI install
 - Lean workspace bootstrap
-- `forge` / `codex` managed backend setup
+- OpenAI Codex auth setup for the native `openai-codex` provider
 
 Do not add references to deleted platform integrations or background services.
 

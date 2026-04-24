@@ -65,7 +65,6 @@ from gauss_cli.autoformalize import (
     normalize_autoformalize_backend_name,
     resolve_managed_chat_request,
     rewrite_forgiving_managed_command,
-    resolve_autoformalize_request,
     supported_autoformalize_backends,
 )
 from gauss_cli.banner import _format_context_length
@@ -76,6 +75,7 @@ from gauss_cli.commands import (
     rewrite_friendly_slash_command,
 )
 from gauss_cli.handoff import HandoffError, HandoffUsageError, execute_handoff, resolve_handoff_request
+from gauss_cli.lean_workflow import LeanWorkflowError, run_native_lean_workflow
 from gauss_cli.config import get_gauss_home
 from gauss_cli.project import (
     GaussProject,
@@ -952,7 +952,7 @@ GAUSS_CADUCEUS = """[#CD7F32]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⡀⠀⣀⣀⠀
 COMPACT_BANNER = """
 [bold #FFD700]╔══════════════════════════════════════════════════════════════╗[/]
 [bold #FFD700]║[/]  [#FFBF00]∑ GAUSS[/] [dim #B8860B]- Lean Autoformalization Workspace[/]     [bold #FFD700]║[/]
-[bold #FFD700]║[/]  [#CD7F32]Focused Claude Code handoff[/]      [dim #B8860B]Math Inc.[/]      [bold #FFD700]║[/]
+[bold #FFD700]║[/]  [#CD7F32]Native OpenGauss Lean workflow[/]    [dim #B8860B]Math Inc.[/]      [bold #FFD700]║[/]
 [bold #FFD700]╚══════════════════════════════════════════════════════════════╝[/]
 """
 
@@ -974,7 +974,7 @@ def _build_compact_banner() -> str:
     )
     return (
         f"\n{compact_logo}\n"
-        f"[dim {dim}]Managed Claude Code Lean handoff[/]\n"
+        f"[dim {dim}]Native OpenGauss Lean workflow[/]\n"
     )
 
 
@@ -1582,7 +1582,7 @@ class GaussCLI:
         When the resolved provider is ``openai-codex``:
 
         1. Strip any ``provider/`` prefix (the Codex Responses API only
-           accepts bare model slugs like ``gpt-5.4``, not ``openai/gpt-5.4``).
+           accepts bare model slugs like ``gpt-5.5``, not ``openai/gpt-5.5``).
         2. If the active model is still the *untouched default* (user never
            explicitly chose a model), replace it with a Codex-compatible
            default so the first session doesn't immediately error.
@@ -1598,7 +1598,7 @@ class GaussCLI:
         current_model = (self.model or "").strip()
         changed = False
 
-        # 1. Strip provider prefix ("openai/gpt-5.4" → "gpt-5.4")
+        # 1. Strip provider prefix ("openai/gpt-5.5" -> "gpt-5.5")
         if "/" in current_model:
             slug = current_model.split("/", 1)[1]
             if not self._model_is_default:
@@ -1612,7 +1612,7 @@ class GaussCLI:
 
         # 2. Replace untouched default with a Codex model
         if self._model_is_default:
-            fallback_model = "gpt-5.3-codex"
+            fallback_model = "gpt-5.5"
             try:
                 from gauss_cli.codex_models import get_codex_model_ids
 
@@ -1655,7 +1655,7 @@ class GaussCLI:
             or cmd_lower.startswith("/auto_proof")
             or cmd_lower.startswith("/handoff")
         ):
-            return "Preparing managed Lean workflow session..."
+            return "Running native OpenGauss Lean workflow..."
         if cmd_lower.startswith("/project"):
             return "Updating Gauss project state..."
         if cmd_lower == "/reload-mcp":
@@ -2991,7 +2991,7 @@ class GaussCLI:
         return configured or os.getcwd()
 
     def _active_workflow_cwd(self) -> str:
-        """Return the active project root for managed workflow child sessions."""
+        """Return the active project root for native Lean workflow runs."""
         ambient_cwd = self._active_handoff_cwd()
         project, _source, _error = self._project_state(cwd=ambient_cwd)
         if project is None:
@@ -3093,7 +3093,6 @@ class GaussCLI:
             "/quit",
             "/exit",
             "/q",
-            "/autoformalize-backend",
             "/model",
             "/provider",
             "/config",
@@ -3231,9 +3230,9 @@ class GaussCLI:
             state_label = "on" if self._chat_mode_active() else "off"
             self._print_surface_notice(
                 f"[dim]`/chat` is {state_label}. When it is on, plain text goes to the main interactive provider in the current Gauss session. "
-                "Use `/chat off` to return to top-level command mode, or `/managed-chat` if you want the configured managed backend child session.[/]",
+                "Use `/chat off` to return to top-level command mode.[/]",
                 f"`/chat` is {state_label}. When it is on, plain text goes to the main interactive provider in the current Gauss session. "
-                "Use /chat off to return to top-level command mode, or /managed-chat if you want the configured managed backend child session.",
+                "Use /chat off to return to top-level command mode.",
             )
             return
 
@@ -3256,8 +3255,8 @@ class GaussCLI:
         )
         self._print_surface_notice(
             "[dim]Next: use `/project use <path>` for an existing Lean repo, `/project init` in the current repo, "
-            "`/project create <path> --template-source <template-or-git-url>` for a new one, or `/managed-chat` if you want the configured managed backend child session instead.[/]",
-            "Next: use /project use <path> for an existing Lean repo, /project init in the current repo, /project create <path> --template-source <template-or-git-url> for a new one, or /managed-chat if you want the configured managed backend child session instead.",
+            "`/project create <path> --template-source <template-or-git-url>` for a new one.[/]",
+            "Next: use /project use <path> for an existing Lean repo, /project init in the current repo, or /project create <path> --template-source <template-or-git-url> for a new one.",
         )
         self._print_surface_notice(
             "[dim]When the project is ready, run `/prove`, `/review`, `/draft`, `/autoprove`, or `/swarm`.[/]",
@@ -3277,7 +3276,7 @@ class GaussCLI:
                 )
 
     def _handle_managed_chat_command(self, cmd: str):
-        """Handle `/managed-chat` by opening the configured managed backend child session."""
+        """Handle legacy `/managed-chat` requests."""
         parts = cmd.strip().split(maxsplit=1)
         payload = parts[1].strip() if len(parts) > 1 else ""
         lowered = payload.lower()
@@ -3285,10 +3284,10 @@ class GaussCLI:
         if lowered == "status":
             active_backend = self._active_managed_backend_name()
             self._print_surface_notice(
-                "[dim]`/managed-chat` opens the configured managed backend child session "
-                f"(`{active_backend}`). Use `/autoformalize-backend` to switch backends, or `/chat` for inline onboarding in the current Gauss session.[/]",
-                f"`/managed-chat` opens the configured managed backend child session ({active_backend}). "
-                "Use /autoformalize-backend to switch backends, or /chat for inline onboarding in the current Gauss session.",
+                "[dim]`/managed-chat` is a legacy escape hatch "
+                f"(`{active_backend}`). Native Lean workflows run through OpenGauss directly; use `/chat` for inline onboarding in the current Gauss session.[/]",
+                f"`/managed-chat` is a legacy escape hatch ({active_backend}). "
+                "Native Lean workflows run through OpenGauss directly; use /chat for inline onboarding in the current Gauss session.",
             )
             return
 
@@ -3533,105 +3532,39 @@ class GaussCLI:
             self._print_project_usage()
 
     def _workflow_spawn_description(self, plan) -> str:
-        """Return a short description for the managed swarm task."""
+        """Return a short description for a Lean workflow."""
         headline = plan.user_instruction[:60].strip()
         if headline:
             return headline
         return plan.canonical_command.lstrip("/")
 
-    def _handle_managed_workflow_command(self, cmd: str):
-        """Handle managed Lean workflow commands by spawning a backend child session."""
+    def _handle_native_workflow_command(self, cmd: str):
+        """Handle Lean workflow commands inside the OpenGauss agent loop."""
         with self._busy_command(self._slow_command_status(cmd)):
             try:
-                plan = resolve_autoformalize_request(
+                result = run_native_lean_workflow(
                     cmd,
-                    self.config,
-                    active_cwd=self._active_workflow_cwd(),
+                    cwd=self._active_workflow_cwd(),
+                    max_iterations=self.max_turns,
+                    session_id=self.session_id,
+                    session_db=self._session_db,
+                    quiet_mode=True,
+                    tool_progress_callback=self._on_tool_progress,
                 )
-            except AutoformalizeError as exc:
+            except LeanWorkflowError as exc:
                 print(f"(>_<) {exc}")
                 return
-
-            self._setup_swarm_completion_callback()
-
-            argv = list(plan.handoff_request.argv)
-
-            swarm = SwarmManager()
-            description = self._workflow_spawn_description(plan)
-
-            task = swarm.spawn_interactive(
-                theorem=plan.user_instruction or plan.backend_command,
-                description=description,
-                argv=argv,
-                cwd=plan.handoff_request.cwd,
-                env=plan.handoff_request.env,
-                workflow_kind=plan.workflow_kind,
-                workflow_command=plan.backend_command,
-                project_name=plan.project.label,
-                project_root=str(plan.project.root),
-                backend_name=plan.managed_context.backend_name,
-            )
-
-            cc = ChatConsole()
-            cc.print(
-                f"[dim]Spawned {plan.workflow_kind} agent {task.task_id} for {plan.project.label}: {description}[/]"
-            )
-            cc.print(
-                f"[dim]Use `/swarm attach {task.task_id}` to connect. "
-                f"`/swarm` for status. Ctrl-] to detach.[/]"
-            )
-
-    def _handle_interactive_workflow_command(self, cmd: str):
-        """Spawn a managed Lean workflow and immediately attach to the session.
-
-        Used for non-auto commands (/prove, /formalize, /draft) where the
-        user expects to land directly in the CC session rather than getting
-        a background task ID.
-        """
-        with self._busy_command(self._slow_command_status(cmd)):
-            try:
-                plan = resolve_autoformalize_request(
-                    cmd,
-                    self.config,
-                    active_cwd=self._active_workflow_cwd(),
-                )
-            except AutoformalizeError as exc:
-                print(f"(>_<) {exc}")
+            except Exception as exc:
+                print(f"(>_<) Native Lean workflow failed: {exc}")
                 return
 
-            self._setup_swarm_completion_callback()
-
-            argv = list(plan.handoff_request.argv)
-
-            swarm = SwarmManager()
-            description = self._workflow_spawn_description(plan)
-
-            task = swarm.spawn_interactive(
-                theorem=plan.user_instruction or plan.backend_command,
-                description=description,
-                argv=argv,
-                cwd=plan.handoff_request.cwd,
-                env=plan.handoff_request.env,
-                workflow_kind=plan.workflow_kind,
-                workflow_command=plan.backend_command,
-                project_name=plan.project.label,
-                project_root=str(plan.project.root),
-                backend_name=plan.managed_context.backend_name,
-            )
-        self._attach_spawned_interactive_task(
-            task,
-            fallback_spawned_message=(
-                f"[dim]Spawned {plan.workflow_kind} agent {task.task_id}: {description}[/]"
-            ),
-            fallback_attach_message=(
-                f"[dim]Use `/swarm attach {task.task_id}` to connect. "
-                f"`/swarm` for status. Ctrl-] to detach.[/]"
-            ),
-        )
+        cc = ChatConsole()
+        response = result.final_response.strip() or result.error or "Native Lean workflow completed without a text response."
+        cc.print(response)
 
     def _handle_autoformalize_command(self, cmd: str):
-        """Backward-compatible wrapper for managed Lean workflow launching."""
-        self._handle_managed_workflow_command(cmd)
+        """Backward-compatible wrapper for native Lean workflow execution."""
+        self._handle_native_workflow_command(cmd)
 
     def _handle_swarm_command(self, cmd: str):
         """Handle ``/swarm`` — display or manage background managed-workflow agents."""
@@ -3642,9 +3575,9 @@ class GaussCLI:
         if len(parts) == 1:
             if not swarm.tasks:
                 cc.print(
-                    "[dim]No managed workflow tasks. "
+                    "[dim]No background workflow tasks. "
                     "Use `/prove`, `/review`, `/checkpoint`, `/refactor`, `/golf`, "
-                    "`/draft`, `/autoprove`, `/formalize`, or `/autoformalize` to spawn one.[/]"
+                    "`/draft`, `/autoprove`, `/formalize`, or `/autoformalize` to run a native Lean workflow.[/]"
                 )
                 return
             cc.print(swarm.render_table())
@@ -3730,63 +3663,6 @@ class GaussCLI:
                 print(f"[swarm] Attach error: {exc}")
             finally:
                 print(f"\n[swarm] Detached from {task_id}.")
-
-    def _handle_autoformalize_backend_command(self, cmd: str):
-        """Handle `/autoformalize-backend [backend]` inside the running TUI."""
-        parts = cmd.strip().split(maxsplit=1)
-        available = supported_autoformalize_backends()
-        active_backend_raw = (
-            os.environ.get("GAUSS_AUTOFORMALIZE_BACKEND")
-            or self.config.get("gauss", {}).get("autoformalize", {}).get("backend", "")
-            or available[0]
-        )
-        try:
-            active_backend = normalize_autoformalize_backend_name(active_backend_raw)
-        except AutoformalizeConfigError:
-            active_backend = str(active_backend_raw)
-
-        if len(parts) < 2 or not parts[1].strip():
-            configured = self.config.get("gauss", {}).get("autoformalize", {}).get("backend", available[0])
-            try:
-                configured = normalize_autoformalize_backend_name(configured)
-            except AutoformalizeConfigError:
-                configured = str(configured)
-
-            print(f"  Autoformalize backend: {active_backend}")
-            print(f"  Config backend:        {configured}")
-            session_override = str(os.environ.get("GAUSS_AUTOFORMALIZE_BACKEND", "") or "").strip()
-            if session_override:
-                print("  Session override:     GAUSS_AUTOFORMALIZE_BACKEND is set for this running CLI")
-            print(f"  Available:            {', '.join(available)}")
-            print("  Usage: /autoformalize-backend <backend>")
-            return
-
-        requested = parts[1].strip()
-        try:
-            normalized = normalize_autoformalize_backend_name(requested)
-        except AutoformalizeConfigError as exc:
-            print(f"(>_<) {exc}")
-            print(f"  Available: {', '.join(available)}")
-            return
-
-        if not isinstance(self.config, dict):
-            self.config = {}
-        gauss_cfg = self.config.setdefault("gauss", {})
-        if not isinstance(gauss_cfg, dict):
-            gauss_cfg = {}
-            self.config["gauss"] = gauss_cfg
-        auto_cfg = gauss_cfg.setdefault("autoformalize", {})
-        if not isinstance(auto_cfg, dict):
-            auto_cfg = {}
-            gauss_cfg["autoformalize"] = auto_cfg
-        auto_cfg["backend"] = normalized
-        os.environ["GAUSS_AUTOFORMALIZE_BACKEND"] = normalized
-
-        if save_config_value("gauss.autoformalize.backend", normalized):
-            print(f"(^_^)b Autoformalize backend set to: {normalized} (saved to config; active now)")
-        else:
-            print(f"(^_^) Autoformalize backend set to: {normalized} (this session only)")
-        print("  The next managed Lean workflow run will use this backend.")
 
     def _handle_handoff_command(self, cmd: str):
         """Handle `/handoff` terminal delegation for interactive local programs."""
@@ -4030,8 +3906,6 @@ class GaussCLI:
                 self._show_model_and_providers()
         elif cmd_lower == "/provider":
             self._show_model_and_providers()
-        elif cmd_lower == "/autoformalize-backend" or cmd_lower.startswith("/autoformalize-backend "):
-            self._handle_autoformalize_backend_command(cmd_original)
         elif (
             cmd_lower == "/prove"
             or cmd_lower.startswith("/prove ")
@@ -4048,7 +3922,7 @@ class GaussCLI:
             or cmd_lower == "/draft"
             or cmd_lower.startswith("/draft ")
         ):
-            self._handle_interactive_workflow_command(cmd_original)
+            self._handle_native_workflow_command(cmd_original)
         elif (
             cmd_lower == "/autoformalize"
             or cmd_lower.startswith("/autoformalize ")
@@ -4063,7 +3937,7 @@ class GaussCLI:
             or cmd_lower == "/auto_proof"
             or cmd_lower.startswith("/auto_proof ")
         ):
-            self._handle_managed_workflow_command(cmd_original)
+            self._handle_native_workflow_command(cmd_original)
         elif cmd_lower == "/swarm" or cmd_lower.startswith("/swarm "):
             self._handle_swarm_command(cmd_original)
         elif cmd_lower.startswith("/prompt"):
@@ -4102,8 +3976,8 @@ class GaussCLI:
         elif cmd_lower == "/reload-mcp":
             self._print_surface_notice(
                 "[bold yellow]User-managed MCP reload is not part of the default Gauss surface.[/] "
-                "[dim]Managed Lean workflows use an isolated Lean MCP config automatically.[/]",
-                "User-managed MCP reload is not part of the default Gauss surface. Managed Lean workflows use an isolated Lean MCP config automatically.",
+                "[dim]Native Lean workflows run in-process; MCP is retained only as an adapter for external clients.[/]",
+                "User-managed MCP reload is not part of the default Gauss surface. Native Lean workflows run in-process; MCP is retained only as an adapter for external clients.",
             )
         elif cmd_lower.startswith("/browser"):
             self._handle_browser_command(cmd_original)

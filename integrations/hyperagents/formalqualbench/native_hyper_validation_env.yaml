@@ -1,0 +1,17 @@
+env:
+  system_name: opengauss-gpt55-hyper-validation
+  backend: native
+  task_filter:
+    - BurnsidePrimeDegreeTheorem
+  task_timeout_seconds: 14400
+  stagnation_timeout_seconds: 1200
+  stagnation_grace_seconds: 300
+  formalqualbench_repo: https://github.com/math-inc/FormalQualBench.git
+  formalqualbench_ref: main
+  comparator_repo: https://github.com/leanprover/comparator.git
+  comparator_ref: master
+  landrun_path: landrun
+  auth_provider: openai-codex
+
+openai:
+  model_name: gpt-5.5

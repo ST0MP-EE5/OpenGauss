@@ -4,17 +4,27 @@ from __future__ import annotations
 
 import importlib
 import os
+import re
+import subprocess
 from abc import ABC, abstractmethod
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
 from gauss_cli.config import load_config
-from gauss_cli.project import ProjectManifestError, ProjectNotFoundError, discover_gauss_project
+from gauss_cli.project import (
+    ProjectManifestError,
+    ProjectNotFoundError,
+    discover_gauss_project,
+    find_lean_project_root,
+)
 
 SUPPORTED_LEAN_SERVICE_PROVIDERS = {"local", "axle"}
 DEFAULT_LEAN_SERVICE_PROVIDER = "local"
 DEFAULT_AXLE_URL = "https://axle.axiommath.ai"
+_LEAN_TOOLCHAIN_VERSION_RE = re.compile(r"^(?:leanprover/lean4:)?v?(\d+\.\d+\.\d+)$")
+_SORRY_RE = re.compile(r"\b(?:sorry|admit)\b")
+_LEAN_FILE_EXCLUDED_PARTS = {".git", ".lake", ".gauss", "__pycache__"}
 
 
 class LeanProofServiceError(RuntimeError):
@@ -73,6 +83,35 @@ class LeanProofServiceInternalError(LeanProofServiceError):
     """Raised when the proof service reports an internal bug."""
 
     code = "internal_error"
+
+
+@dataclass(frozen=True)
+class LocalLeanCommandResult:
+    """Structured result for local Lean project commands."""
+
+    command: list[str]
+    cwd: str
+    returncode: int | None
+    stdout: str
+    stderr: str
+    timed_out: bool = False
+    error: str = ""
+
+    @property
+    def success(self) -> bool:
+        return self.returncode == 0 and not self.timed_out and not self.error
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "success": self.success,
+            "command": list(self.command),
+            "cwd": self.cwd,
+            "returncode": self.returncode,
+            "stdout": self.stdout,
+            "stderr": self.stderr,
+            "timed_out": self.timed_out,
+            "error": self.error,
+        }
 
 
 class LeanProofService(ABC):
@@ -169,6 +208,10 @@ def get_configured_axle_environment(
     if project_settings.get("environment"):
         return project_settings["environment"]
 
+    inferred = _infer_axle_environment_from_toolchain(cwd)
+    if inferred:
+        return inferred
+
     cfg = _lean_service_config(config)
     configured = str(cfg.get("environment", "") or "").strip()
     return configured or None
@@ -213,6 +256,203 @@ def serialize_service_result(value: Any) -> Any:
     if isinstance(value, tuple):
         return [serialize_service_result(item) for item in value]
     return value
+
+
+def _lean_file_paths(root: Path) -> list[Path]:
+    files: list[Path] = []
+    for path in root.rglob("*.lean"):
+        if any(part in _LEAN_FILE_EXCLUDED_PARTS for part in path.parts):
+            continue
+        files.append(path)
+    return sorted(files)
+
+
+def detect_sorries(content: str) -> list[dict[str, Any]]:
+    """Return line-level `sorry`/`admit` occurrences in Lean content."""
+    findings: list[dict[str, Any]] = []
+    for index, line in enumerate(str(content or "").splitlines(), start=1):
+        if _SORRY_RE.search(line):
+            findings.append({"line": index, "text": line.strip()})
+    return findings
+
+
+def local_lean_project_status(*, cwd: str | Path | None = None) -> dict[str, Any]:
+    """Return local OpenGauss/Lean project status without using MCP or shell."""
+    active_dir = Path(cwd or os.getcwd()).expanduser().resolve()
+    project = discover_gauss_project(active_dir)
+    lean_files = _lean_file_paths(project.lean_root)
+    sorry_count = 0
+    files_with_sorries: list[str] = []
+    for path in lean_files:
+        try:
+            findings = detect_sorries(path.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if findings:
+            sorry_count += len(findings)
+            files_with_sorries.append(str(path.relative_to(project.lean_root)))
+
+    return {
+        "project": {
+            "name": project.name,
+            "root": str(project.root),
+            "lean_root": str(project.lean_root),
+            "manifest_path": str(project.manifest_path),
+        },
+        "lean_files": len(lean_files),
+        "sorry_count": sorry_count,
+        "files_with_sorries": files_with_sorries,
+        "toolchain_environment": _infer_axle_environment_from_toolchain(active_dir),
+    }
+
+
+def local_lean_sorry_report(
+    *,
+    cwd: str | Path | None = None,
+    path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Return `sorry`/`admit` findings for a file or the active Lean project."""
+    active_dir = Path(cwd or os.getcwd()).expanduser().resolve()
+    project = discover_gauss_project(active_dir)
+    if path is not None and str(path).strip():
+        candidate = Path(path).expanduser()
+        if not candidate.is_absolute():
+            candidate = project.lean_root / candidate
+        targets = [candidate.resolve()]
+    else:
+        targets = _lean_file_paths(project.lean_root)
+
+    files: list[dict[str, Any]] = []
+    total = 0
+    for target in targets:
+        try:
+            target.relative_to(project.lean_root)
+        except ValueError as exc:
+            raise LeanProofServiceConfigurationError(
+                f"Lean file is outside project root: {target}",
+                code="invalid_path",
+            ) from exc
+        if not target.is_file():
+            raise LeanProofServiceNotFoundError(f"Lean file not found: {target}")
+        findings = detect_sorries(target.read_text(encoding="utf-8"))
+        total += len(findings)
+        if findings:
+            files.append(
+                {
+                    "path": str(target),
+                    "relative_path": str(target.relative_to(project.lean_root)),
+                    "sorries": findings,
+                }
+            )
+
+    return {
+        "project_root": str(project.root),
+        "lean_root": str(project.lean_root),
+        "sorry_count": total,
+        "files": files,
+    }
+
+
+def _run_local_lean_command(
+    command: list[str],
+    *,
+    cwd: Path,
+    timeout_seconds: int,
+) -> LocalLeanCommandResult:
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return LocalLeanCommandResult(
+            command=command,
+            cwd=str(cwd),
+            returncode=None,
+            stdout=exc.stdout or "",
+            stderr=exc.stderr or "",
+            timed_out=True,
+            error=f"Timed out after {timeout_seconds}s",
+        )
+    except OSError as exc:
+        return LocalLeanCommandResult(
+            command=command,
+            cwd=str(cwd),
+            returncode=None,
+            stdout="",
+            stderr="",
+            error=str(exc),
+        )
+    return LocalLeanCommandResult(
+        command=command,
+        cwd=str(cwd),
+        returncode=completed.returncode,
+        stdout=completed.stdout or "",
+        stderr=completed.stderr or "",
+    )
+
+
+def local_lake_build(
+    *,
+    cwd: str | Path | None = None,
+    targets: list[str] | tuple[str, ...] | None = None,
+    timeout_seconds: int = 30 * 60,
+) -> dict[str, Any]:
+    """Run `lake build` for the active project using controlled argv execution."""
+    active_dir = Path(cwd or os.getcwd()).expanduser().resolve()
+    project = discover_gauss_project(active_dir)
+    cleaned_targets = [str(target).strip() for target in (targets or []) if str(target).strip()]
+    result = _run_local_lean_command(
+        ["lake", "build", *cleaned_targets],
+        cwd=project.lean_root,
+        timeout_seconds=timeout_seconds,
+    )
+    payload = result.to_payload()
+    payload["project_root"] = str(project.root)
+    payload["lean_root"] = str(project.lean_root)
+    payload["targets"] = cleaned_targets
+    return payload
+
+
+def local_lean_check_file(
+    *,
+    path: str | Path,
+    cwd: str | Path | None = None,
+    timeout_seconds: int = 30 * 60,
+) -> dict[str, Any]:
+    """Run `lake env lean <file>` on a project file using controlled argv execution."""
+    active_dir = Path(cwd or os.getcwd()).expanduser().resolve()
+    project = discover_gauss_project(active_dir)
+    target = Path(path).expanduser()
+    if not target.is_absolute():
+        target = project.lean_root / target
+    target = target.resolve()
+    try:
+        target.relative_to(project.lean_root)
+    except ValueError as exc:
+        raise LeanProofServiceConfigurationError(
+            f"Lean file is outside project root: {target}",
+            code="invalid_path",
+        ) from exc
+    if not target.is_file():
+        raise LeanProofServiceNotFoundError(f"Lean file not found: {target}")
+
+    result = _run_local_lean_command(
+        ["lake", "env", "lean", str(target)],
+        cwd=project.lean_root,
+        timeout_seconds=timeout_seconds,
+    )
+    payload = result.to_payload()
+    payload["project_root"] = str(project.root)
+    payload["lean_root"] = str(project.lean_root)
+    payload["path"] = str(target)
+    payload["relative_path"] = str(target.relative_to(project.lean_root))
+    payload["sorries"] = detect_sorries(target.read_text(encoding="utf-8"))
+    return payload
 
 
 class AxleProofService(LeanProofService):
@@ -383,3 +623,36 @@ def _get_project_lean_service_settings(cwd: str | Path | None) -> dict[str, str]
         "provider": provider,
         "environment": environment,
     }
+
+
+def _infer_axle_environment_from_toolchain(cwd: str | Path | None) -> str | None:
+    """Infer an AXLE environment name from the nearest Lean toolchain file."""
+    active_dir = Path(cwd or os.getcwd()).expanduser()
+    lean_root: Path | None = None
+
+    try:
+        project = discover_gauss_project(active_dir)
+    except ProjectNotFoundError:
+        lean_root = find_lean_project_root(active_dir.resolve())
+    except ProjectManifestError as exc:
+        raise LeanProofServiceConfigurationError(str(exc)) from exc
+    else:
+        lean_root = project.lean_root
+
+    if lean_root is None:
+        return None
+
+    toolchain_path = lean_root / "lean-toolchain"
+    if not toolchain_path.is_file():
+        return None
+
+    try:
+        toolchain_value = toolchain_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+
+    match = _LEAN_TOOLCHAIN_VERSION_RE.match(toolchain_value)
+    if not match:
+        return None
+
+    return f"lean-{match.group(1)}"

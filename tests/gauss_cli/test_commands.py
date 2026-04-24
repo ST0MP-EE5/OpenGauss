@@ -14,7 +14,6 @@ from gauss_cli.commands import (
 # All commands that must be present in the shared COMMANDS dict.
 EXPECTED_COMMANDS = {
     "/chat",
-    "/managed-chat",
     "/project",
     "/prove",
     "/draft",
@@ -25,7 +24,6 @@ EXPECTED_COMMANDS = {
     "/autoprove",
     "/formalize",
     "/autoformalize",
-    "/autoformalize-backend",
     "/swarm",
     "/new",
     "/reset",
@@ -61,21 +59,19 @@ def _completions(completer: SlashCommandCompleter, text: str):
 
 class TestCommands:
     def test_shared_commands_include_project_and_workflow_entries(self):
-        """Gauss ships project management plus managed workflow commands."""
+        """Gauss ships project management plus native Lean workflow commands."""
         assert COMMANDS["/paste"] == "Check clipboard for an image and attach it"
         assert COMMANDS["/chat"] == "Show the first-step guide and enable plain-language chat mode"
-        assert COMMANDS["/managed-chat"] == "Open the configured managed backend child session and return to Gauss when it exits"
         assert COMMANDS["/project"] == "Create, convert, inspect, or switch the active Gauss project"
-        assert COMMANDS["/prove"] == "Spawn a managed backend agent for the guided Lean prove workflow"
-        assert COMMANDS["/draft"] == "Spawn a managed backend agent for the Lean draft workflow"
-        assert COMMANDS["/review"] == "Spawn a managed backend agent for the read-only Lean review workflow"
-        assert COMMANDS["/checkpoint"] == "Spawn a managed backend agent for the Lean checkpoint workflow"
-        assert COMMANDS["/refactor"] == "Spawn a managed backend agent for the Lean refactor workflow"
-        assert COMMANDS["/golf"] == "Spawn a managed backend agent for the Lean proof golfing workflow"
-        assert COMMANDS["/autoprove"] == "Spawn a managed backend agent for the autonomous Lean autoprove workflow"
-        assert COMMANDS["/formalize"] == "Spawn a managed backend agent for the interactive Lean formalize workflow"
-        assert COMMANDS["/autoformalize"] == "Spawn a managed backend agent for the autonomous Lean autoformalize workflow"
-        assert COMMANDS["/autoformalize-backend"] == "Show or change the managed workflow backend"
+        assert COMMANDS["/prove"] == "Run the native OpenGauss Lean prove workflow"
+        assert COMMANDS["/draft"] == "Run the native OpenGauss Lean draft workflow"
+        assert COMMANDS["/review"] == "Run the native OpenGauss Lean review workflow"
+        assert COMMANDS["/checkpoint"] == "Run the native OpenGauss Lean checkpoint workflow"
+        assert COMMANDS["/refactor"] == "Run the native OpenGauss Lean refactor workflow"
+        assert COMMANDS["/golf"] == "Run the native OpenGauss Lean proof golfing workflow"
+        assert COMMANDS["/autoprove"] == "Run the native OpenGauss Lean autoprove workflow"
+        assert COMMANDS["/formalize"] == "Run the native OpenGauss Lean formalize workflow"
+        assert COMMANDS["/autoformalize"] == "Run the native OpenGauss Lean autoformalize workflow"
         assert COMMANDS["/swarm"].startswith("Show workflow agents")
 
     def test_all_expected_commands_present(self):

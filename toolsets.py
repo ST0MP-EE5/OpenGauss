@@ -89,6 +89,23 @@ TOOLSETS = {
         "includes": []
     },
 
+    "lean-local": {
+        "description": "OpenGauss-native Lean project operations",
+        "tools": [
+            "lean_project_status",
+            "lean_sorry_report",
+            "lean_lake_build",
+            "lean_check_file",
+        ],
+        "includes": []
+    },
+
+    "opengauss-lean": {
+        "description": "Native OpenGauss Lean workflow tools without generic shell access",
+        "tools": [],
+        "includes": ["file", "axle", "lean-local"]
+    },
+
     "autoformalize": {
         "description": "Minimal Gauss workflow for papers, source files, and browser-driven research",
         "tools": [],

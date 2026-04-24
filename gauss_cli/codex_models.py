@@ -12,6 +12,8 @@ import os
 logger = logging.getLogger(__name__)
 
 DEFAULT_CODEX_MODELS: List[str] = [
+    "gpt-5.5",
+    "gpt-5.4",
     "gpt-5.3-codex",
     "gpt-5.2-codex",
     "gpt-5.1-codex-max",
@@ -19,6 +21,7 @@ DEFAULT_CODEX_MODELS: List[str] = [
 ]
 
 _FORWARD_COMPAT_TEMPLATE_MODELS: List[tuple[str, tuple[str, ...]]] = [
+    ("gpt-5.5", ("gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex")),
     ("gpt-5.3-codex", ("gpt-5.2-codex",)),
     ("gpt-5.4", ("gpt-5.3-codex", "gpt-5.2-codex")),
     ("gpt-5.3-codex-spark", ("gpt-5.3-codex", "gpt-5.2-codex")),
@@ -46,7 +49,8 @@ def _add_forward_compat_models(model_ids: List[str]) -> List[str]:
             ordered.append(synthetic_model)
             seen.add(synthetic_model)
 
-    return ordered
+    preferred = [model for model in DEFAULT_CODEX_MODELS if model in seen]
+    return preferred + [model for model in ordered if model not in set(preferred)]
 
 
 def _fetch_models_from_api(access_token: str) -> List[str]:

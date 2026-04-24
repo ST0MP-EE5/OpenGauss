@@ -63,10 +63,10 @@ fi
 if grep -F "gauss-use-openrouter-key" "$INSTALL_LOG" >/dev/null; then
     die "expected installer summary to avoid provider-key helper clutter"
 fi
-grep -F "Managed Lean workflow assets ready:" "$INSTALL_LOG" >/dev/null || die "expected installer to prewarm managed Lean workflow assets"
-grep -F "Managed /prove staging verified:" "$INSTALL_LOG" >/dev/null || die "expected installer to verify managed /prove staging in the Lean workspace"
-if grep -F "Skipping managed /prove staging verification" "$INSTALL_LOG" >/dev/null; then
-    die "expected installer managed /prove verification to run in the Lean workspace"
+grep -F "Native Lean workflow assets ready:" "$INSTALL_LOG" >/dev/null || die "expected installer to check native Lean workflow assets"
+grep -F "Native /prove workflow verified:" "$INSTALL_LOG" >/dev/null || die "expected installer to verify native /prove in the Lean workspace"
+if grep -F "Skipping native /prove workflow verification" "$INSTALL_LOG" >/dev/null; then
+    die "expected installer native /prove verification to run in the Lean workspace"
 fi
 if grep -F "Would you like to run the setup wizard now?" "$INSTALL_LOG" >/dev/null; then
     die "expected installer auto mode to stay non-interactive"
@@ -80,7 +80,7 @@ export GAUSS_HOME
 grep -F 'export GAUSS_HOME="${GAUSS_HOME:-' "$HOME/.bashrc" >/dev/null || die "expected shell block to preserve an explicitly set GAUSS_HOME"
 
 echo "==> Verifying core commands"
-for cmd in gauss uv node npm claude codex elan lake rg tmux ffmpeg; do
+for cmd in gauss uv node npm codex elan lake rg tmux ffmpeg; do
     assert_command "$cmd"
 done
 
@@ -98,7 +98,6 @@ fi
 if grep -F "$GAUSS_HOME/.env" "$GAUSS_HOME/guide/index.html" >/dev/null; then
     die "expected generated guide to avoid exposing the staged .env path"
 fi
-assert_exists "$GAUSS_HOME/autoformalize/assets/lean4-skills/.gauss-managed-revision"
 assert_exists "$GAUSS_HOME/skins/mathinc.yaml"
 assert_exists "$WORKSPACE_DIR/PAPER.md"
 assert_exists "$WORKSPACE_DIR/.gauss/project.yaml"
@@ -107,9 +106,6 @@ assert_exists "$HOME/.local/bin/gauss-configure-main-provider"
 assert_exists "$HOME/.local/bin/gauss-open-session"
 assert_exists "$HOME/.local/bin/gauss-open-guide"
 assert_exists "$HOME/.local/bin/gauss-launch-session"
-assert_exists "$HOME/.claude/settings.json"
-assert_exists "$HOME/.claude/plugins/known_marketplaces.json"
-assert_exists "$HOME/.claude/plugins/installed_plugins.json"
 
 echo "==> Verifying recorded install root"
 INSTALL_ROOT_VALUE="$(cat "$GAUSS_HOME/install-root")"
@@ -118,7 +114,6 @@ INSTALL_ROOT_VALUE="$(cat "$GAUSS_HOME/install-root")"
 echo "==> Verifying config defaults and staged provider state"
 python3 - "$GAUSS_HOME" "$WORKSPACE_DIR" "$INITIAL_OPENAI_API_KEY" "$HOME" <<'PY'
 from pathlib import Path
-import json
 import sys
 import yaml
 
@@ -131,11 +126,14 @@ config = yaml.safe_load((gauss_home / "config.yaml").read_text(encoding="utf-8")
 assert config["display"]["skin"] == "mathinc"
 assert config["terminal"]["backend"] == "local"
 assert config["terminal"]["cwd"] == str(workspace_dir)
-assert config["gauss"]["autoformalize"]["backend"] == "forge"
+assert config["gauss"]["autoformalize"]["backend"] == "native"
 assert config["gauss"]["autoformalize"]["auth_mode"] == "auto"
+assert config["gauss"]["workflow"]["provider"] == "openai-codex"
+assert config["gauss"]["workflow"]["model"] == "gpt-5.5"
+assert config["gauss"]["workflow"]["toolset"] == "opengauss-lean"
 assert config["agent"]["max_turns"] == 90
 assert config["model"]["provider"] == "custom"
-assert config["model"]["default"] == "gpt-5.4"
+assert config["model"]["default"] == "gpt-5.5"
 assert config["model"]["base_url"] == "https://api.openai.com/v1"
 assert (workspace_dir / "lean-toolchain").read_text(encoding="utf-8").strip() == "leanprover/lean4:v4.28.0"
 
@@ -143,22 +141,6 @@ env_text = (gauss_home / ".env").read_text(encoding="utf-8")
 assert f'OPENAI_API_KEY="{expected_key}"' in env_text
 assert 'OPENAI_BASE_URL="https://api.openai.com/v1"' in env_text
 
-claude_settings = json.loads((home_dir / ".claude" / "settings.json").read_text(encoding="utf-8"))
-marketplace = claude_settings["extraKnownMarketplaces"]["lean4-skills"]
-assert marketplace["source"] == {"source": "github", "repo": "cameronfreer/lean4-skills"}
-assert marketplace["autoUpdate"] is True
-assert claude_settings["enabledPlugins"]["lean4@lean4-skills"] is True
-
-known_marketplaces = json.loads((home_dir / ".claude" / "plugins" / "known_marketplaces.json").read_text(encoding="utf-8"))
-known_marketplace = known_marketplaces["lean4-skills"]
-assert known_marketplace["source"] == {"source": "github", "repo": "cameronfreer/lean4-skills"}
-assert known_marketplace["autoUpdate"] is True
-assert Path(known_marketplace["installLocation"]).exists()
-
-installed_plugins = json.loads((home_dir / ".claude" / "plugins" / "installed_plugins.json").read_text(encoding="utf-8"))
-plugin_entry = installed_plugins["plugins"]["lean4@lean4-skills"][0]
-assert plugin_entry["scope"] == "user"
-assert Path(plugin_entry["installPath"]).exists()
 PY
 
 echo "==> Verifying gauss works from the repository-local venv"
@@ -183,7 +165,7 @@ grep -F 'OPENAI_BASE_URL="https://api.openai.com/v1"' "$GAUSS_HOME/.env" >/dev/n
 echo "==> Verifying launcher summary"
 SUMMARY_OUTPUT="$(gauss-launch-session --print-summary)"
 printf '%s\n' "$SUMMARY_OUTPUT"
-[[ "$SUMMARY_OUTPUT" == *"Managed backend: forge"* ]] || die "expected managed backend summary"
+[[ "$SUMMARY_OUTPUT" == *"Native Lean runtime: openai-codex:gpt-5.5"* ]] || die "expected native Lean runtime summary"
 [[ "$SUMMARY_OUTPUT" == *"Main chat: ready."* ]] || die "expected ready main-chat summary"
 [[ "$SUMMARY_OUTPUT" == *"$WORKSPACE_DIR"* ]] || die "expected workspace path in launcher summary"
 [[ "$SUMMARY_OUTPUT" == *"/chat"* ]] || die "expected launcher summary to mention /chat"

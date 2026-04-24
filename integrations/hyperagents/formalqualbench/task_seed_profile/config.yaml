@@ -1,0 +1,2 @@
+name: opengauss-native-formalqualbench-base
+description: Narrow mutation surface for the native OpenGauss FormalQualBench sanity campaign.

@@ -36,6 +36,15 @@ class TestResolveToolset:
         assert "axle_verify_proof" in tools
         assert "axle_environments" in tools
 
+    def test_opengauss_lean_toolset_excludes_generic_terminal(self):
+        tools = resolve_toolset("opengauss-lean")
+        assert "read_file" in tools
+        assert "patch" in tools
+        assert "axle_check" in tools
+        assert "lean_project_status" in tools
+        assert "lean_lake_build" in tools
+        assert "terminal" not in tools
+
     def test_composite_toolset(self):
         tools = resolve_toolset("autoformalize")
         assert "read_file" in tools

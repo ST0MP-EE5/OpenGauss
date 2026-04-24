@@ -3,8 +3,9 @@
 Gauss CLI - Main entry point.
 
 Usage:
-    gauss                      # Interactive chat (default)
+    gauss                      # Native OpenGauss Lean workflow in checked-in Lean4 workspace
     gauss chat                 # Interactive chat
+    gauss mcp-server           # OpenGauss MCP bridge for external clients
     gauss setup                # Interactive setup wizard
     gauss logout               # Clear stored authentication
     gauss status               # Show status of all components
@@ -25,6 +26,11 @@ from typing import Optional
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(PROJECT_ROOT))
+
+LEAN4_WORKSPACE_ROOT = PROJECT_ROOT / "Lean4"
+NATIVE_LEAN_DEFAULT_MODEL = "gpt-5.5"
+NATIVE_LEAN_DEFAULT_PROVIDER = "openai-codex"
+NATIVE_LEAN_DEFAULT_TOOLSETS = "opengauss-lean"
 
 # Load .env from ~/.gauss/.env first, then project root as dev fallback.
 # User-managed env files should override stale shell exports on restart.
@@ -113,6 +119,32 @@ def _has_any_provider_configured() -> bool:
             pass
 
     return False
+
+
+def _launched_from_repo_root() -> bool:
+    try:
+        return Path.cwd().resolve() == PROJECT_ROOT
+    except OSError:
+        return False
+
+
+def _lean4_workspace_available() -> bool:
+    return (LEAN4_WORKSPACE_ROOT / ".gauss" / "project.yaml").exists()
+
+
+def _apply_native_lean_defaults(args) -> bool:
+    """Make bare `gauss` from the repo root enter the OpenGauss Lean workspace."""
+    if not (_launched_from_repo_root() and _lean4_workspace_available()):
+        return False
+
+    os.environ.setdefault("TERMINAL_CWD", str(LEAN4_WORKSPACE_ROOT))
+    if not getattr(args, "model", None):
+        args.model = NATIVE_LEAN_DEFAULT_MODEL
+    if not getattr(args, "provider", None):
+        args.provider = NATIVE_LEAN_DEFAULT_PROVIDER
+    if not getattr(args, "toolsets", None):
+        args.toolsets = NATIVE_LEAN_DEFAULT_TOOLSETS
+    return True
 
 
 def _session_browse_picker(sessions: list) -> Optional[str]:
@@ -421,8 +453,8 @@ def cmd_chat(args):
         # If resolution fails, keep the original value — _init_agent will
         # report "Session not found" with the original input
 
-    # First-run guard: managed workflow orchestration can run without an in-process
-    # model, but direct chat / single-query mode still need a provider.
+    # First-run guard: native Lean workflows and direct chat both need an
+    # in-process model provider.
     if not _has_any_provider_configured():
         if getattr(args, "query", None):
             print()
@@ -440,10 +472,10 @@ def cmd_chat(args):
         print()
         print("No in-process model provider is configured yet.")
         print(
-            "You can still use `/project`, `/prove`, `/draft`, `/autoprove`, "
-            "`/formalize`, `/autoformalize`, and `/swarm` in the interactive CLI."
+            "You can still inspect or initialize projects, but `/prove`, `/autoprove`, "
+            "`/formalize`, and `/autoformalize` need OpenAI Codex auth."
         )
-        print("Run `gauss setup` later if you also want direct Gauss chat/model commands.")
+        print("Run `gauss model` or `gauss setup` to configure the provider.")
         print()
 
     # Start update check in background (runs while other init happens)
@@ -1634,6 +1666,22 @@ def cmd_doctor(args):
     run_doctor(args)
 
 
+def cmd_mcp_server(args):
+    """Run the OpenGauss MCP bridge."""
+    try:
+        from gauss_cli.mcp_server import run_mcp_server
+    except ImportError as exc:
+        print("Error: OpenGauss MCP support requires the optional `mcp` dependency.")
+        print("Install it with: pip install -e .[mcp]")
+        raise SystemExit(1) from exc
+
+    try:
+        run_mcp_server(transport=args.transport)
+    except RuntimeError as exc:
+        print(f"Error: {exc}")
+        sys.exit(1)
+
+
 def cmd_config(args):
     """Configuration management."""
     from gauss_cli.config import config_command
@@ -1798,17 +1846,17 @@ def _refresh_workflow_runtime(repo_root: Path) -> None:
         subprocess.run(["npm", "ci", "--silent"], cwd=repo_root, check=False)
 
     try:
-        from gauss_cli.autoformalize import prepare_managed_runtime_assets
+        from toolsets import resolve_toolset
 
-        print("→ Refreshing managed Lean workflow assets...")
-        prepared = prepare_managed_runtime_assets(env=install_env)
-        revision = prepared.get("skill_revision", "").strip()
-        if revision:
-            print(f"✓ Managed Lean runtime ready: {revision[:12]}")
-        else:
-            print("✓ Managed Lean runtime ready")
+        print("→ Checking native Lean workflow tools...")
+        tools = set(resolve_toolset("opengauss-lean"))
+        required_tools = {"axle_check", "lean_project_status", "lean_lake_build", "lean_check_file"}
+        missing_tools = sorted(required_tools - tools)
+        if missing_tools:
+            raise RuntimeError(f"missing tools: {', '.join(missing_tools)}")
+        print("✓ Native Lean runtime ready: opengauss-lean")
     except Exception as exc:
-        print(f"⚠ Managed Lean runtime refresh failed: {exc}")
+        print(f"⚠ Native Lean runtime check failed: {exc}")
 
 
 def _stash_local_changes_if_needed(git_cmd: list[str], cwd: Path) -> Optional[str]:
@@ -2094,7 +2142,7 @@ def _coalesce_session_name_args(argv: list) -> list:
     _SUBCOMMANDS = {
         "chat", "model", "setup", "login", "logout",
         "status", "doctor", "config", "tools",
-        "sessions", "insights", "version", "update", "uninstall",
+        "sessions", "insights", "version", "update", "uninstall", "mcp-server",
     }
     _SESSION_FLAGS = {"-c", "--continue", "-r", "--resume"}
 
@@ -2126,8 +2174,10 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    gauss                           Start the interactive CLI
+    gauss                           Start the native Lean CLI in Lean4 from this repo
+    gauss --query "..."             Run a single native Lean request
     gauss --resume <session_id>     Resume a specific session by ID
+    gauss mcp-server                Run the OpenGauss MCP adapter over stdio
     gauss setup                     Run setup wizard
     gauss model                     Select default model
     gauss config                    View configuration
@@ -2189,6 +2239,42 @@ For more help on a command:
         action="append",
         default=None,
         help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "-q", "--query",
+        help="Single query (non-interactive mode)"
+    )
+    parser.add_argument(
+        "-m", "--model",
+        help="Model to use (default from repo root: gpt-5.5)"
+    )
+    parser.add_argument(
+        "-t", "--toolsets",
+        help="Comma-separated toolsets to enable"
+    )
+    parser.add_argument(
+        "--provider",
+        choices=["auto", "openrouter", "nous", "openai-codex", "anthropic", "zai", "kimi-coding", "minimax", "minimax-cn"],
+        default=None,
+        help="Inference provider (default from repo root: openai-codex)"
+    )
+    parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        default=False,
+        help="Verbose output"
+    )
+    parser.add_argument(
+        "-Q", "--quiet",
+        action="store_true",
+        default=False,
+        help="Quiet mode for programmatic use"
+    )
+    parser.add_argument(
+        "--checkpoints",
+        action="store_true",
+        default=False,
+        help="Enable filesystem checkpoints before destructive file operations"
     )
     
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
@@ -2423,7 +2509,26 @@ For more help on a command:
         help="Attempt to fix issues automatically"
     )
     doctor_parser.set_defaults(func=cmd_doctor)
-    
+
+    # =========================================================================
+    # mcp-server command
+    # =========================================================================
+    mcp_server_parser = subparsers.add_parser(
+        "mcp-server",
+        help="Run the OpenGauss MCP bridge",
+        description=(
+            "Expose OpenGauss project and native Lean workflow adapters over MCP "
+            "for external clients."
+        ),
+    )
+    mcp_server_parser.add_argument(
+        "--transport",
+        choices=["stdio", "sse", "streamable-http"],
+        default="stdio",
+        help="MCP transport to serve (default: stdio)",
+    )
+    mcp_server_parser.set_defaults(func=cmd_mcp_server)
+
     # =========================================================================
     # config command
     # =========================================================================
@@ -2744,27 +2849,31 @@ For more help on a command:
     # Handle top-level --resume / --continue as shortcut to chat
     if (args.resume or args.continue_last) and args.command is None:
         args.command = "chat"
-        args.query = None
-        args.model = None
-        args.provider = None
-        args.toolsets = None
-        args.verbose = False
+        args.query = getattr(args, "query", None)
+        args.model = getattr(args, "model", None)
+        args.provider = getattr(args, "provider", None)
+        args.toolsets = getattr(args, "toolsets", None)
+        args.verbose = getattr(args, "verbose", False)
+        args.quiet = getattr(args, "quiet", False)
         if not hasattr(args, "worktree"):
             args.worktree = False
+        _apply_native_lean_defaults(args)
         cmd_chat(args)
         return
     
     # Default to chat if no command specified
     if args.command is None:
-        args.query = None
-        args.model = None
-        args.provider = None
-        args.toolsets = None
-        args.verbose = False
+        args.query = getattr(args, "query", None)
+        args.model = getattr(args, "model", None)
+        args.provider = getattr(args, "provider", None)
+        args.toolsets = getattr(args, "toolsets", None)
+        args.verbose = getattr(args, "verbose", False)
+        args.quiet = getattr(args, "quiet", False)
         args.resume = None
         args.continue_last = None
         if not hasattr(args, "worktree"):
             args.worktree = False
+        _apply_native_lean_defaults(args)
         cmd_chat(args)
         return
     

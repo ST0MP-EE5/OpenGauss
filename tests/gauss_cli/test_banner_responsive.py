@@ -248,6 +248,6 @@ def test_cprint_strips_ansi_when_terminal_lacks_color(monkeypatch):
     monkeypatch.setattr("gauss_cli.banner.supports_unicode", lambda *_args, **_kwargs: False)
     monkeypatch.setattr("gauss_cli.banner._pt_print", lambda value: captured.append(value))
 
-    cprint("\033[1;33m⚠ Managed /prove — needs project first\033[0m")
+    cprint("\033[1;33m⚠ Native /prove — needs project first\033[0m")
 
-    assert captured == ["! Managed /prove - needs project first"]
+    assert captured == ["! Native /prove - needs project first"]

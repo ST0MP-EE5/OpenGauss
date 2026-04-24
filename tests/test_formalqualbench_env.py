@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import yaml
 
@@ -16,12 +15,56 @@ def test_load_eval_config_defaults_to_top3(tmp_path: Path):
 
     config = fq.load_eval_config(config_path)
 
-    assert config.backend == "forge"
+    assert config.backend == "native"
     assert config.task_filter == fq.DEFAULT_TASKS
-    assert config.model_name == "gpt-5.4"
+    assert config.model_name == "gpt-5.5"
     assert config.task_timeout_seconds == 14400
     assert config.stagnation_timeout_seconds == 1800
     assert config.stagnation_grace_seconds == 300
+
+
+def test_verified8_config_uses_native_codex_lane():
+    config = fq.load_eval_config(
+        Path(__file__).resolve().parent.parent
+        / "environments"
+        / "benchmarks"
+        / "formalqualbench"
+        / "opengauss_verified8.yaml"
+    )
+
+    assert config.system_name == "opengauss-gpt55-direct-verified8"
+    assert config.backend == "native"
+    assert config.model_name == "gpt-5.5"
+    assert config.auth_provider == "openai-codex"
+    assert config.task_filter == (
+        "DeBruijnErdos",
+        "JordanDerangementTheorem",
+        "ParisHarringtonPrinciple",
+        "ColorfulCaratheodoryTheorem",
+        "DLOQuantifierElimination",
+        "BanachStoneTheorem",
+        "GleasonKahaneZelazkoTheorem",
+        "VonNeumannDoubleCommutantTheorem",
+    )
+
+
+def test_discover_override_bundle_prefers_explicit_root(monkeypatch, tmp_path: Path):
+    bundle_root = tmp_path / "override-bundle"
+    hints_dir = bundle_root / "theorem_hints"
+    hints_dir.mkdir(parents=True)
+    (bundle_root / "instructions.md").write_text("benchmark instructions\n", encoding="utf-8")
+    (bundle_root / "startup_context.md").write_text("benchmark context\n", encoding="utf-8")
+    (hints_dir / "PontryaginDuality.md").write_text("hint\n", encoding="utf-8")
+
+    monkeypatch.setenv(fq.OVERRIDE_BUNDLE_ROOT_ENV, str(bundle_root))
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+
+    bundle = fq._discover_override_bundle()
+
+    assert bundle.root == bundle_root.resolve()
+    assert bundle.instructions_template == (bundle_root / "instructions.md").resolve()
+    assert bundle.startup_context == (bundle_root / "startup_context.md").resolve()
+    assert bundle.theorem_hints_dir == hints_dir.resolve()
 
 
 def test_prepare_task_workspace_emits_challenge_and_solution(tmp_path: Path):
@@ -44,6 +87,9 @@ def test_prepare_task_workspace_emits_challenge_and_solution(tmp_path: Path):
     assert (workspace_root / ".gauss" / "project.yaml").is_file()
     assert challenge_path.read_text(encoding="utf-8") == challenge_text
     assert solution_path.read_text(encoding="utf-8") == challenge_text
+    lakefile = (workspace_root / "lakefile.toml").read_text(encoding="utf-8")
+    assert 'name = "Challenge"' in lakefile
+    assert 'name = "Solution"' in lakefile
 
 
 def test_run_one_task_requires_comparator_success(monkeypatch, tmp_path: Path):
@@ -56,25 +102,6 @@ def test_run_one_task_requires_comparator_success(monkeypatch, tmp_path: Path):
         "namespace JordanCycleTheorem\n theorem MainTheorem : True := by sorry\nend JordanCycleTheorem\n",
         encoding="utf-8",
     )
-    helper_dir = tmp_path / "helpers"
-    helper_dir.mkdir()
-    (helper_dir / "bash").write_text("#!/bin/sh\nexec /bin/bash \"$@\"\n", encoding="utf-8")
-    (helper_dir / "bash").chmod(0o755)
-    mcp_proxy_path = tmp_path / "mcp_proxy.py"
-    mcp_proxy_path.write_text("print('proxy')\n", encoding="utf-8")
-
-    monkeypatch.setattr(
-        fq,
-        "resolve_autoformalize_request",
-        lambda *args, **kwargs: SimpleNamespace(
-            handoff_request=SimpleNamespace(
-                argv=("/usr/bin/forge", "-p", "prompt"),
-                cwd=str(tmp_path),
-                env={"PATH": "/usr/bin"},
-            )
-        ),
-    )
-
     def fake_run_checked(command, *, cwd, env=None, timeout_seconds=None):
         del cwd, env, timeout_seconds
         if command[:2] == ["lake", "build"]:
@@ -83,33 +110,25 @@ def test_run_one_task_requires_comparator_success(monkeypatch, tmp_path: Path):
             return fq.ProcessResult(returncode=1, stdout="", stderr="comparator failed", duration_seconds=3.0)
         raise AssertionError(f"Unexpected command: {command}")
 
-    def fake_run_checked_with_stagnation(
-        command,
-        *,
-        cwd,
-        env=None,
-        timeout_seconds=None,
-        progress_paths=None,
-        idle_timeout_seconds=0,
-        idle_grace_seconds=0,
-        poll_seconds=0,
-    ):
-        del cwd, env, timeout_seconds, progress_paths, idle_timeout_seconds, idle_grace_seconds, poll_seconds
-        if command[0] == "/usr/bin/forge":
-            return fq.ProcessResult(returncode=0, stdout="backend ok", stderr="", duration_seconds=1.0)
-        raise AssertionError(f"Unexpected command: {command}")
+    def fake_run_native_backend(config, *, command, workspace_root):
+        assert config.backend == "native"
+        assert command.startswith("/autoformalize FormalQualBench theorem: JordanCycleTheorem.")
+        assert workspace_root.name == "JordanCycleTheorem"
+        return fq.ProcessResult(returncode=0, stdout="backend ok", stderr="", duration_seconds=1.0)
 
     monkeypatch.setattr(fq, "_run_checked", fake_run_checked)
-    monkeypatch.setattr(fq, "_run_checked_with_stagnation", fake_run_checked_with_stagnation)
+    monkeypatch.setattr(fq, "_run_native_backend", fake_run_native_backend)
 
-    config = fq.EvalConfig(backend="forge", system_name="opengauss-forge-gpt54-direct")
+    config = fq.EvalConfig(backend="native", system_name="opengauss-gpt55-direct")
     result = fq._run_one_task(
         config,
         cached_repo=cached_repo,
-        comparator_binary=tmp_path / "comparator",
+        toolchain=fq.ComparatorToolchain(
+            comparator_binary=tmp_path / "comparator",
+            landrun_binary=tmp_path / "landrun",
+            lean4export_binary=tmp_path / "lean4export",
+        ),
         output_root=tmp_path / "run",
-        helper_dir=helper_dir,
-        mcp_proxy_path=mcp_proxy_path,
         task_name="JordanCycleTheorem",
         bundle=fq.OverrideBundle(),
     )
@@ -133,11 +152,11 @@ def test_evaluate_config_writes_summary_with_call_counts_and_artifacts(monkeypat
         yaml.safe_dump(
             {
                 "env": {
-                    "system_name": "opengauss-forge-hyper-promoted",
-                    "backend": "forge",
+                    "system_name": "opengauss-gpt55-direct",
+                    "backend": "native",
                     "task_filter": ["JordanCycleTheorem", "BurnsidePrimeDegreeTheorem"],
                 },
-                "openai": {"model_name": "gpt-5.4"},
+                "openai": {"model_name": "gpt-5.5"},
             },
             sort_keys=False,
         ),
@@ -147,20 +166,28 @@ def test_evaluate_config_writes_summary_with_call_counts_and_artifacts(monkeypat
     samples_path = tmp_path / "samples.jsonl"
     monkeypatch.setenv(fq.SUMMARY_ENV, str(summary_path))
     monkeypatch.setenv(fq.SAMPLES_ENV, str(samples_path))
-    monkeypatch.setattr(fq, "_ensure_helpers", lambda output_root: (output_root / ".helpers", output_root / ".helpers" / "bash", output_root / ".helpers" / "mcp_proxy.py"))
     monkeypatch.setattr(fq, "_discover_override_bundle", lambda: fq.OverrideBundle())
     monkeypatch.setattr(fq, "_ensure_git_checkout", lambda repo_url, revision, destination: destination)
-    monkeypatch.setattr(fq, "_ensure_comparator_binary", lambda config, cache_root: cache_root / "comparator")
+    monkeypatch.setattr(fq, "_prime_formalqualbench_cache", lambda cached_repo: None)
+    monkeypatch.setattr(
+        fq,
+        "_ensure_comparator_toolchain",
+        lambda config, cache_root: fq.ComparatorToolchain(
+            comparator_binary=cache_root / "comparator",
+            landrun_binary=cache_root / "landrun",
+            lean4export_binary=cache_root / "lean4export",
+        ),
+    )
 
-    def fake_run_one_task(config, *, cached_repo, comparator_binary, output_root, helper_dir, mcp_proxy_path, task_name, bundle):
-        del config, cached_repo, comparator_binary, helper_dir, mcp_proxy_path, bundle
+    def fake_run_one_task(config, *, cached_repo, toolchain, output_root, task_name, bundle):
+        del cached_repo, toolchain, bundle
         score = 1.0 if task_name == "JordanCycleTheorem" else 0.0
         artifact_dir = output_root / "artifacts" / task_name
         artifact_dir.mkdir(parents=True, exist_ok=True)
         return {
             "task_name": task_name,
-            "backend": "forge",
-            "system": "opengauss-forge-hyper-promoted",
+            "backend": config.backend,
+            "system": config.system_name,
             "artifact_dir": str(artifact_dir),
             "challenge_path": str(output_root / f"{task_name}-Challenge.lean"),
             "solution_path": str(output_root / f"{task_name}-Solution.lean"),
@@ -168,22 +195,22 @@ def test_evaluate_config_writes_summary_with_call_counts_and_artifacts(monkeypat
             "comparator_valid": bool(score),
             "score": score,
             "wall_clock_seconds": 5.0 if score else 7.0,
-            "bash_call_count": 3 if score else 4,
-            "mcp_call_count": 2 if score else 5,
+            "bash_call_count": 0,
+            "mcp_call_count": 0,
         }
 
     monkeypatch.setattr(fq, "_run_one_task", fake_run_one_task)
 
     summary = fq.evaluate_config(config_path)
 
-    assert summary["system"] == "opengauss-forge-hyper-promoted"
-    assert summary["backend"] == "forge"
+    assert summary["system"] == "opengauss-gpt55-direct"
+    assert summary["backend"] == "native"
     assert summary["task_count"] == 2
     assert summary["solve_count"] == 1
-    assert summary["total_bash_call_count"] == 7
-    assert summary["total_mcp_call_count"] == 7
-    assert summary["total_tool_call_count"] == 14
-    assert summary["selection_score"] == 999987986.0
+    assert summary["total_bash_call_count"] == 0
+    assert summary["total_mcp_call_count"] == 0
+    assert summary["total_tool_call_count"] == 0
+    assert summary["selection_score"] == 999988000.0
     assert summary["artifact_root"] == str(summary_path.parent)
     assert summary_path.exists()
     assert samples_path.exists()
@@ -224,7 +251,7 @@ def test_run_checked_with_stagnation_allows_progress_updates(tmp_path: Path):
         [sys.executable, "-c", script],
         cwd=tmp_path,
         progress_paths=[progress_file],
-        idle_timeout_seconds=1,
+        idle_timeout_seconds=2,
         idle_grace_seconds=0,
         poll_seconds=1,
     )

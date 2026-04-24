@@ -77,7 +77,7 @@ def _effective_provider_label() -> str:
 def _configured_backend_label(config: dict) -> str:
     gauss_cfg = config.get("gauss", {})
     auto_cfg = gauss_cfg.get("autoformalize", {})
-    return str(auto_cfg.get("backend") or "forge")
+    return str(auto_cfg.get("backend") or "native")
 
 
 def show_status(args) -> None:
@@ -149,6 +149,9 @@ def show_status(args) -> None:
 
     print()
     print(color("◆ Lean Workflows", Colors.CYAN, Colors.BOLD))
-    print("  Managed lanes: forge, codex")
+    print("  Native lane:   OpenGauss Lean runner")
+    print("  Provider:      openai-codex")
+    print("  Model:         gpt-5.5")
+    print("  Toolset:       opengauss-lean")
     print("  Benchmark env: formalqualbench")
     print()

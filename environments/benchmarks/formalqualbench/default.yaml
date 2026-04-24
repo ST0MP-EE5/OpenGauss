@@ -1,6 +1,6 @@
 env:
-  system_name: opengauss-forge-gpt54-direct
-  backend: forge
+  system_name: opengauss-gpt55-direct
+  backend: native
   task_filter:
     - JordanCycleTheorem
     - PontryaginDuality
@@ -14,4 +14,4 @@ env:
   auth_provider: openai-codex
 
 openai:
-  model_name: gpt-5.4
+  model_name: gpt-5.5

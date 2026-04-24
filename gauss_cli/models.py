@@ -17,6 +17,7 @@ from typing import Any, Optional
 OPENROUTER_MODELS: list[tuple[str, str]] = [
     ("anthropic/claude-opus-4.6",       "recommended"),
     ("anthropic/claude-sonnet-4.5",     ""),
+    ("openai/gpt-5.5",                  ""),
     ("openai/gpt-5.4-pro",              ""),
     ("openai/gpt-5.4",                  ""),
     ("openai/gpt-5.3-codex",            ""),
@@ -34,12 +35,15 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
     "nous": [
         "claude-opus-4-6",
         "claude-sonnet-4-6",
+        "gpt-5.5",
         "gpt-5.4",
         "gemini-3-flash",
         "gemini-3.0-pro-preview",
         "deepseek-v3.2",
     ],
     "openai-codex": [
+        "gpt-5.5",
+        "gpt-5.4",
         "gpt-5.3-codex",
         "gpt-5.2-codex",
         "gpt-5.1-codex-mini",

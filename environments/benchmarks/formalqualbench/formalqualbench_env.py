@@ -18,17 +18,7 @@ _repo_root = Path(__file__).resolve().parent.parent.parent.parent
 if str(_repo_root) not in sys.path:
     sys.path.insert(0, str(_repo_root))
 
-from gauss_cli.autoformalize import (  # noqa: E402
-    AUTOFORMALIZE_CODEX_MODEL_ENV,
-    AUTOFORMALIZE_MCP_COUNT_PATH_ENV,
-    AUTOFORMALIZE_MCP_PROXY_ENV,
-    AUTOFORMALIZE_NONINTERACTIVE_ENV,
-    FORGE_AUTOFORMALIZE_BACKEND,
-    FORGE_INSTRUCTIONS_TEMPLATE_ENV,
-    FORGE_STARTUP_TEMPLATE_ENV,
-    normalize_autoformalize_backend_name,
-    resolve_autoformalize_request,
-)
+from gauss_cli.lean_workflow import run_native_lean_workflow  # noqa: E402
 from gauss_cli.project import initialize_gauss_project  # noqa: E402
 from gauss_cli.config import get_gauss_home  # noqa: E402
 
@@ -42,24 +32,35 @@ DEFAULT_FORMALQUALBENCH_REPO = "https://github.com/math-inc/FormalQualBench.git"
 DEFAULT_FORMALQUALBENCH_REF = "main"
 DEFAULT_COMPARATOR_REPO = "https://github.com/leanprover/comparator.git"
 DEFAULT_COMPARATOR_REF = "master"
+DEFAULT_LANDRUN_REPO = "https://github.com/Zouuup/landrun.git"
+DEFAULT_LANDRUN_REF = "main"
 DEFAULT_PERMITTED_AXIOMS = ("propext", "Quot.sound", "Classical.choice")
 SUMMARY_ENV = "HERMES_HYPER_SUMMARY_PATH"
 SAMPLES_ENV = "HERMES_HYPER_SAMPLES_PATH"
-DEFAULT_MODEL = "gpt-5.4"
+DEFAULT_MODEL = "gpt-5.5"
+NATIVE_BACKEND_NAME = "native"
 OVERRIDE_BUNDLE_SUBDIR = Path("workspace") / "opengauss_formalqualbench"
+OVERRIDE_BUNDLE_ROOT_ENV = "GAUSS_AUTOFORMALIZE_OVERRIDE_BUNDLE_ROOT"
 
 
 @dataclass(slots=True)
 class OverrideBundle:
     root: Path | None = None
-    forge_instructions: Path | None = None
+    instructions_template: Path | None = None
     startup_context: Path | None = None
     theorem_hints_dir: Path | None = None
 
 
 @dataclass(slots=True)
+class ComparatorToolchain:
+    comparator_binary: Path
+    landrun_binary: Path
+    lean4export_binary: Path
+
+
+@dataclass(slots=True)
 class EvalConfig:
-    backend: str = FORGE_AUTOFORMALIZE_BACKEND
+    backend: str = NATIVE_BACKEND_NAME
     system_name: str = ""
     task_filter: tuple[str, ...] = DEFAULT_TASKS
     task_timeout_seconds: int = 4 * 60 * 60
@@ -132,16 +133,15 @@ def load_eval_config(config_path: Path, cli_overrides: dict[str, str] | None = N
     openai_cfg = payload.get("openai", {}) or {}
     cli_overrides = cli_overrides or {}
 
-    backend = normalize_autoformalize_backend_name(
-        cli_overrides.get("env.backend", env_cfg.get("backend", FORGE_AUTOFORMALIZE_BACKEND))
-    )
+    backend = str(cli_overrides.get("env.backend", env_cfg.get("backend", NATIVE_BACKEND_NAME)) or NATIVE_BACKEND_NAME)
+    backend = "native" if backend.strip().lower() in {"native", "direct", "codex"} else backend.strip().lower()
     model_name = str(cli_overrides.get("openai.model_name", openai_cfg.get("model_name", DEFAULT_MODEL)) or DEFAULT_MODEL)
     output_root = cli_overrides.get("env.output_root") or env_cfg.get("output_root")
     cache_root = cli_overrides.get("env.cache_root") or env_cfg.get("cache_root")
 
     config = EvalConfig(
         backend=backend,
-        system_name=str(env_cfg.get("system_name") or f"opengauss-{backend}-direct"),
+        system_name=str(env_cfg.get("system_name") or "opengauss-gpt55-direct"),
         task_filter=_parse_task_filter(cli_overrides.get("env.task_filter", env_cfg.get("task_filter"))),
         task_timeout_seconds=int(
             cli_overrides.get("env.task_timeout_seconds", env_cfg.get("task_timeout_seconds", 4 * 60 * 60))
@@ -186,18 +186,29 @@ def load_eval_config(config_path: Path, cli_overrides: dict[str, str] | None = N
 
 
 def _discover_override_bundle() -> OverrideBundle:
-    hermes_home = str(os.getenv("HERMES_HOME", "") or "").strip()
-    if not hermes_home:
-        return OverrideBundle()
-    root = Path(hermes_home).expanduser() / OVERRIDE_BUNDLE_SUBDIR
+    override_root = str(os.getenv(OVERRIDE_BUNDLE_ROOT_ENV, "") or "").strip()
+    if override_root:
+        root = Path(override_root).expanduser()
+    else:
+        hermes_home = str(os.getenv("HERMES_HOME", "") or "").strip()
+        if not hermes_home:
+            return OverrideBundle()
+        root = Path(hermes_home).expanduser() / OVERRIDE_BUNDLE_SUBDIR
     if not root.is_dir():
         return OverrideBundle()
+    resolved_root = root.resolve()
     theorem_hints_dir = root / "theorem_hints"
+    instructions_template = None
+    for candidate_name in ("instructions.md", "codex_instructions.md"):
+        candidate = resolved_root / candidate_name
+        if candidate.is_file():
+            instructions_template = candidate
+            break
     return OverrideBundle(
-        root=root,
-        forge_instructions=(root / "forge_instructions.md") if (root / "forge_instructions.md").is_file() else None,
-        startup_context=(root / "startup_context.md") if (root / "startup_context.md").is_file() else None,
-        theorem_hints_dir=theorem_hints_dir if theorem_hints_dir.is_dir() else None,
+        root=resolved_root,
+        instructions_template=instructions_template,
+        startup_context=(resolved_root / "startup_context.md") if (resolved_root / "startup_context.md").is_file() else None,
+        theorem_hints_dir=theorem_hints_dir.resolve() if theorem_hints_dir.is_dir() else None,
     )
 
 
@@ -385,7 +396,58 @@ def _find_comparator_binary(repo_root: Path) -> Path:
     raise RuntimeError(f"Comparator binary not found under {repo_root}")
 
 
-def _ensure_comparator_binary(config: EvalConfig, cache_root: Path) -> Path:
+def _ensure_landrun_binary(config: EvalConfig, cache_root: Path) -> Path:
+    requested = str(config.landrun_path or "").strip()
+    if requested:
+        expanded = Path(requested).expanduser()
+        if expanded.is_file() and os.access(expanded, os.X_OK):
+            return expanded.resolve()
+        resolved = shutil.which(requested)
+        if resolved:
+            return Path(resolved).resolve()
+
+    go = shutil.which("go")
+    if go is None:
+        raise RuntimeError(
+            "landrun is not available in PATH and Go is not installed, so the FormalQualBench "
+            "comparator sandbox cannot be bootstrapped."
+        )
+
+    landrun_root = _ensure_git_checkout(
+        DEFAULT_LANDRUN_REPO,
+        DEFAULT_LANDRUN_REF,
+        cache_root / "landrun",
+    )
+    binary = landrun_root / "landrun"
+    if binary.is_file() and os.access(binary, os.X_OK):
+        return binary.resolve()
+
+    build = _run_checked([go, "build", "-o", str(binary), "cmd/landrun/main.go"], cwd=landrun_root)
+    if build.returncode != 0:
+        raise RuntimeError(f"Failed to build landrun: {build.stderr or build.stdout}")
+    if not binary.is_file() or not os.access(binary, os.X_OK):
+        raise RuntimeError(f"landrun binary not found after build: {binary}")
+    return binary.resolve()
+
+
+def _ensure_lean4export_binary(comparator_root: Path) -> Path:
+    package_root = comparator_root / ".lake" / "packages" / "lean4export"
+    if not package_root.is_dir():
+        raise RuntimeError(f"lean4export package not found under comparator checkout: {package_root}")
+
+    binary = package_root / ".lake" / "build" / "bin" / "lean4export"
+    if binary.is_file() and os.access(binary, os.X_OK):
+        return binary.resolve()
+
+    build = _run_checked(["lake", "build", "lean4export"], cwd=package_root)
+    if build.returncode != 0:
+        raise RuntimeError(f"Failed to build lean4export: {build.stderr or build.stdout}")
+    if not binary.is_file() or not os.access(binary, os.X_OK):
+        raise RuntimeError(f"lean4export binary not found after build: {binary}")
+    return binary.resolve()
+
+
+def _ensure_comparator_toolchain(config: EvalConfig, cache_root: Path) -> ComparatorToolchain:
     comparator_root = _ensure_git_checkout(
         config.comparator_repo,
         config.comparator_ref,
@@ -394,7 +456,26 @@ def _ensure_comparator_binary(config: EvalConfig, cache_root: Path) -> Path:
     build = _run_checked(["lake", "build", "comparator"], cwd=comparator_root)
     if build.returncode != 0:
         raise RuntimeError(f"Failed to build comparator: {build.stderr or build.stdout}")
-    return _find_comparator_binary(comparator_root)
+    return ComparatorToolchain(
+        comparator_binary=_find_comparator_binary(comparator_root),
+        landrun_binary=_ensure_landrun_binary(config, cache_root),
+        lean4export_binary=_ensure_lean4export_binary(comparator_root),
+    )
+
+
+def _prime_formalqualbench_cache(cached_repo: Path) -> None:
+    mathlib_root = cached_repo / ".lake" / "packages" / "mathlib"
+    if (mathlib_root / "Mathlib.lean").is_file():
+        return
+
+    update = _run_checked(["lake", "update"], cwd=cached_repo, timeout_seconds=30 * 60)
+    if update.returncode != 0:
+        raise RuntimeError(f"Failed to prime FormalQualBench mathlib checkout: {update.stderr or update.stdout}")
+
+    cache_get = _run_checked(["lake", "exe", "cache", "get"], cwd=cached_repo, timeout_seconds=30 * 60)
+    if cache_get.returncode != 0:
+        # The benchmark remains correct without the Mathlib build cache; this only affects latency.
+        return
 
 
 def _resolve_output_root(config: EvalConfig, config_path: Path) -> Path:
@@ -404,33 +485,6 @@ def _resolve_output_root(config: EvalConfig, config_path: Path) -> Path:
     if config.output_root is not None:
         return config.output_root
     return (config_path.parent / "formalqualbench-run").resolve()
-
-
-def _ensure_helpers(output_root: Path) -> tuple[Path, Path, Path]:
-    helper_dir = output_root / ".helpers"
-    helper_dir.mkdir(parents=True, exist_ok=True)
-    bash_counter_path = helper_dir / "bash_count.txt"
-    bash_wrapper_path = helper_dir / "bash"
-    real_bash = shutil.which("bash") or "/bin/bash"
-    bash_wrapper_path.write_text(
-        "\n".join(
-            [
-                "#!/bin/sh",
-                'COUNT_FILE="${GAUSS_AUTOFORMALIZE_BASH_COUNT_PATH:-}"',
-                'if [ -n "$COUNT_FILE" ]; then',
-                '  mkdir -p "$(dirname "$COUNT_FILE")"',
-                '  count=0',
-                '  if [ -f "$COUNT_FILE" ]; then count=$(cat "$COUNT_FILE" 2>/dev/null || printf 0); fi',
-                '  printf "%s\\n" "$((count + 1))" > "$COUNT_FILE"',
-                "fi",
-                f'exec "{real_bash}" "$@"',
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    bash_wrapper_path.chmod(0o755)
-    return helper_dir, bash_wrapper_path, Path(__file__).with_name("mcp_proxy.py")
 
 
 def _build_backend_instruction(config: EvalConfig, task_name: str, theorem_hint: str) -> str:
@@ -462,15 +516,6 @@ def _write_json(path: Path, payload: Any) -> Path:
     return path
 
 
-def _read_count(path: Path) -> int:
-    if not path.exists():
-        return 0
-    try:
-        return int(path.read_text(encoding="utf-8").strip() or "0")
-    except Exception:
-        return 0
-
-
 def _prepare_task_workspace(cached_repo: Path, output_root: Path, task_name: str) -> tuple[Path, Path, Path, Path]:
     workspace_root = output_root / "workspaces" / task_name
     if workspace_root.exists():
@@ -484,6 +529,18 @@ def _prepare_task_workspace(cached_repo: Path, output_root: Path, task_name: str
     solution_path = workspace_root / "Solution.lean"
     shutil.copy2(challenge_source, challenge_path)
     shutil.copy2(challenge_source, solution_path)
+    lakefile_toml = workspace_root / "lakefile.toml"
+    if lakefile_toml.is_file():
+        contents = lakefile_toml.read_text(encoding="utf-8")
+        additions: list[str] = []
+        for module_name in ("Challenge", "Solution"):
+            if f'name = "{module_name}"' not in contents:
+                additions.append(f'[[lean_lib]]\nname = "{module_name}"\n')
+        if additions:
+            lakefile_toml.write_text(
+                contents.rstrip() + "\n\n" + "\n".join(additions),
+                encoding="utf-8",
+            )
     artifact_dir = output_root / "artifacts" / task_name
     artifact_dir.mkdir(parents=True, exist_ok=True)
     return workspace_root, artifact_dir, challenge_path, solution_path
@@ -499,62 +556,46 @@ def _comparator_config_payload(config: EvalConfig, theorem_names: list[str]) -> 
     }
 
 
-def _autoformalize_config(config: EvalConfig, artifact_dir: Path) -> dict[str, Any]:
-    return {
-        "gauss": {
-            "autoformalize": {
-                "backend": config.backend,
-                "handoff_mode": "helper",
-                "auth_mode": "auto",
-                "managed_state_dir": str(artifact_dir / "managed"),
-            }
-        }
-    }
-
-
-def _task_environment(
-    config: EvalConfig,
-    *,
-    workspace_root: Path,
-    bash_wrapper_dir: Path,
-    bundle: OverrideBundle,
-    bash_count_path: Path,
-    mcp_count_path: Path,
-    mcp_proxy_path: Path,
-) -> dict[str, str]:
-    env = dict(os.environ)
-    env["PATH"] = os.pathsep.join(
-        [
-            str(bash_wrapper_dir),
-            str(Path(config.landrun_path).expanduser().resolve().parent)
-            if Path(config.landrun_path).expanduser().is_absolute()
-            else "",
-            env.get("PATH", ""),
-        ]
-    ).strip(os.pathsep)
-    env["GAUSS_AUTOFORMALIZE_BASH_COUNT_PATH"] = str(bash_count_path)
-    env[AUTOFORMALIZE_MCP_PROXY_ENV] = str(mcp_proxy_path)
-    env[AUTOFORMALIZE_MCP_COUNT_PATH_ENV] = str(mcp_count_path)
-    env[AUTOFORMALIZE_NONINTERACTIVE_ENV] = "1"
-    env["TERMINAL_CWD"] = str(workspace_root)
-    if config.backend == "codex" and config.model_name:
-        env[AUTOFORMALIZE_CODEX_MODEL_ENV] = config.model_name
-    if config.backend == FORGE_AUTOFORMALIZE_BACKEND:
-        if bundle.forge_instructions is not None:
-            env[FORGE_INSTRUCTIONS_TEMPLATE_ENV] = str(bundle.forge_instructions)
-        if bundle.startup_context is not None:
-            env[FORGE_STARTUP_TEMPLATE_ENV] = str(bundle.startup_context)
-    return env
+def _run_native_backend(config: EvalConfig, *, command: str, workspace_root: Path) -> ProcessResult:
+    start = time.time()
+    previous_terminal_cwd = os.environ.get("TERMINAL_CWD")
+    os.environ["TERMINAL_CWD"] = str(workspace_root)
+    try:
+        result = run_native_lean_workflow(
+            command,
+            cwd=workspace_root,
+            model=config.model_name,
+            max_iterations=config.max_agent_turns or 90,
+            quiet_mode=True,
+        )
+        return ProcessResult(
+            returncode=0 if result.success else 1,
+            stdout=result.final_response or "",
+            stderr=result.error or "",
+            duration_seconds=round(time.time() - start, 3),
+            error=result.error or None,
+        )
+    except Exception as exc:
+        return ProcessResult(
+            returncode=None,
+            stdout="",
+            stderr=str(exc),
+            duration_seconds=round(time.time() - start, 3),
+            error=str(exc),
+        )
+    finally:
+        if previous_terminal_cwd is None:
+            os.environ.pop("TERMINAL_CWD", None)
+        else:
+            os.environ["TERMINAL_CWD"] = previous_terminal_cwd
 
 
 def _run_one_task(
     config: EvalConfig,
     *,
     cached_repo: Path,
-    comparator_binary: Path,
+    toolchain: ComparatorToolchain,
     output_root: Path,
-    helper_dir: Path,
-    mcp_proxy_path: Path,
     task_name: str,
     bundle: OverrideBundle,
 ) -> dict[str, Any]:
@@ -563,35 +604,12 @@ def _run_one_task(
         output_root,
         task_name,
     )
-    bash_count_path = artifact_dir / "bash_count.txt"
-    mcp_count_path = artifact_dir / "mcp_count.txt"
     theorem_hint = _read_theorem_hint(bundle, task_name)
     command = f"/autoformalize {_build_backend_instruction(config, task_name, theorem_hint)}"
-    launch_plan = resolve_autoformalize_request(
-        command,
-        _autoformalize_config(config, artifact_dir),
-        active_cwd=str(workspace_root),
-        base_env=_task_environment(
-            config,
-            workspace_root=workspace_root,
-            bash_wrapper_dir=helper_dir,
-            bundle=bundle,
-            bash_count_path=bash_count_path,
-            mcp_count_path=mcp_count_path,
-            mcp_proxy_path=mcp_proxy_path,
-        ),
-    )
-
-    managed_root = artifact_dir / "managed"
-    backend_result = _run_checked_with_stagnation(
-        list(launch_plan.handoff_request.argv),
-        cwd=Path(launch_plan.handoff_request.cwd),
-        env=launch_plan.handoff_request.env,
-        timeout_seconds=config.task_timeout_seconds,
-        progress_paths=[solution_path, managed_root],
-        idle_timeout_seconds=config.stagnation_timeout_seconds,
-        idle_grace_seconds=config.stagnation_grace_seconds,
-        poll_seconds=config.stagnation_poll_seconds,
+    backend_result = _run_native_backend(
+        config,
+        command=command,
+        workspace_root=workspace_root,
     )
     (artifact_dir / "backend.stdout.log").write_text(backend_result.stdout, encoding="utf-8")
     (artifact_dir / "backend.stderr.log").write_text(backend_result.stderr, encoding="utf-8")
@@ -600,32 +618,25 @@ def _run_one_task(
     comparator_config_path = artifact_dir / "comparator_config.json"
     _write_json(comparator_config_path, _comparator_config_payload(config, theorem_names))
 
-    if backend_result.idle_timed_out:
-        lake_result = ProcessResult(
-            returncode=None,
-            stdout="",
-            stderr="",
-            duration_seconds=0.0,
-            error="Skipped because backend stagnated before producing a proof candidate",
-        )
-        comparator_result = ProcessResult(
-            returncode=None,
-            stdout="",
-            stderr="",
-            duration_seconds=0.0,
-            error="Skipped because backend stagnated before comparator validation",
-        )
-    else:
-        lake_result = _run_checked(
-            ["lake", "build", "Challenge", "Solution"],
-            cwd=workspace_root,
-            timeout_seconds=min(config.task_timeout_seconds, 30 * 60),
-        )
-        comparator_result = _run_checked(
-            ["lake", "env", str(comparator_binary), str(comparator_config_path)],
-            cwd=workspace_root,
-            timeout_seconds=min(config.task_timeout_seconds, 30 * 60),
-        )
+    lake_result = _run_checked(
+        ["lake", "build", "Challenge", "Solution"],
+        cwd=workspace_root,
+        timeout_seconds=min(config.task_timeout_seconds, 30 * 60),
+    )
+    comparator_env = dict(os.environ)
+    comparator_env["PATH"] = os.pathsep.join(
+        [
+            str(toolchain.landrun_binary.parent),
+            str(toolchain.lean4export_binary.parent),
+            comparator_env.get("PATH", ""),
+        ]
+    ).strip(os.pathsep)
+    comparator_result = _run_checked(
+        ["lake", "env", str(toolchain.comparator_binary), str(comparator_config_path)],
+        cwd=workspace_root,
+        env=comparator_env,
+        timeout_seconds=min(config.task_timeout_seconds, 30 * 60),
+    )
     (artifact_dir / "lake_build.stdout.log").write_text(lake_result.stdout, encoding="utf-8")
     (artifact_dir / "lake_build.stderr.log").write_text(lake_result.stderr, encoding="utf-8")
     (artifact_dir / "comparator.stdout.log").write_text(comparator_result.stdout, encoding="utf-8")
@@ -636,8 +647,8 @@ def _run_one_task(
         backend_result.duration_seconds + lake_result.duration_seconds + comparator_result.duration_seconds,
         3,
     )
-    bash_call_count = _read_count(bash_count_path)
-    mcp_call_count = _read_count(mcp_count_path)
+    bash_call_count = 0
+    mcp_call_count = 0
     result = {
         "task_name": task_name,
         "backend": config.backend,
@@ -676,7 +687,6 @@ def evaluate_config(config_path: Path, cli_overrides: dict[str, str] | None = No
     config = load_eval_config(config_path, cli_overrides)
     output_root = _resolve_output_root(config, config_path)
     output_root.mkdir(parents=True, exist_ok=True)
-    helper_dir, _bash_wrapper, mcp_proxy_path = _ensure_helpers(output_root)
     bundle = _discover_override_bundle()
     cache_root = config.cache_root or (get_gauss_home() / "benchmarks" / "formalqualbench" / "cache")
     cache_root.mkdir(parents=True, exist_ok=True)
@@ -685,16 +695,15 @@ def evaluate_config(config_path: Path, cli_overrides: dict[str, str] | None = No
         config.formalqualbench_ref,
         cache_root / "formalqualbench",
     )
-    comparator_binary = _ensure_comparator_binary(config, cache_root)
+    _prime_formalqualbench_cache(formalqualbench_root)
+    toolchain = _ensure_comparator_toolchain(config, cache_root)
 
     results = [
         _run_one_task(
             config,
             cached_repo=formalqualbench_root,
-            comparator_binary=comparator_binary,
+            toolchain=toolchain,
             output_root=output_root,
-            helper_dir=helper_dir,
-            mcp_proxy_path=mcp_proxy_path,
             task_name=task_name,
             bundle=bundle,
         )
@@ -734,7 +743,7 @@ def evaluate_config(config_path: Path, cli_overrides: dict[str, str] | None = No
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="FormalQualBench benchmark runner for OpenGauss-managed backends.")
+    parser = argparse.ArgumentParser(description="FormalQualBench benchmark runner for native OpenGauss Lean workflows.")
     subparsers = parser.add_subparsers(dest="command")
     evaluate_parser = subparsers.add_parser("evaluate")
     evaluate_parser.add_argument("--config", required=True)

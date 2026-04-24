@@ -132,10 +132,15 @@ DEFAULT_CONFIG = {
             "legacy_cli_surface": False,
         },
         "autoformalize": {
-            "backend": "forge",
-            "handoff_mode": "auto",
+            "backend": "native",
+            "handoff_mode": "direct",
             "auth_mode": "auto",
             "managed_state_dir": "",
+        },
+        "workflow": {
+            "provider": "openai-codex",
+            "model": "gpt-5.5",
+            "toolset": "opengauss-lean",
         },
         "project": {
             "template_source": "",
@@ -375,7 +380,7 @@ DEFAULT_CONFIG = {
     },
 
     # Config schema version - bump this when adding new required fields
-    "_config_version": 10,
+    "_config_version": 11,
 }
 
 # =============================================================================

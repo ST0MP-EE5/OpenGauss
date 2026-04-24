@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "gauss-agent"
 version = "0.2.2"
-description = "Gauss is a focused Lean autoformalization workspace with managed Forge and Codex workflow backends."
+description = "Gauss is a focused Lean autoformalization workspace with a native OpenGauss workflow runner."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Math Inc." }]
@@ -68,7 +68,7 @@ include = ["agent", "tools", "tools.*", "gauss_cli", "environments", "environmen
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-    "core: marks the Lean/FormalQual/Forge core surface",
+    "core: marks the Lean/FormalQual/OpenGauss core surface",
     "integration: marks tests requiring external services (API keys, Modal, etc.)",
 ]
 addopts = "-m 'not integration' -n auto"

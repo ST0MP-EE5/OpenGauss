@@ -1,0 +1,81 @@
+name: opengauss-native-formalqualbench
+seed_profile: current
+task_seed_profile: ./task_seed_profile
+
+mutation:
+  model: "gpt-5.5"
+  provider: "openai-codex"
+  reasoning_effort: "high"
+  max_iterations: 12
+  toolsets: ["terminal", "file"]
+  allowed_paths:
+    - "workspace/opengauss_formalqualbench/instructions.md"
+    - "workspace/opengauss_formalqualbench/startup_context.md"
+    - "workspace/opengauss_formalqualbench/theorem_hints/**"
+    - "meta/**"
+  blocked_paths:
+    - ".env"
+    - "auth.json"
+    - "gateway.pid"
+    - "gateway_state.json"
+    - "paired_users.json"
+    - "processes.json"
+    - "logs/**"
+    - "sessions/**"
+    - "memories/**"
+  dry_run_fallback: false
+
+evaluation:
+  benchmarks:
+    - name: opengauss-native-formalqualbench-train
+      type: environment
+      split: train
+      stage: preliminary
+      provider: "openai-codex"
+      entrypoint: "../../../environments/benchmarks/formalqualbench/formalqualbench_env.py"
+      config_file: "native_hyper_train_env.yaml"
+      metric_key: "selection_score"
+      model: "gpt-5.5"
+      max_iterations: 12
+      timeout_seconds: 28800
+    - name: opengauss-native-formalqualbench-validation
+      type: environment
+      split: validation
+      provider: "openai-codex"
+      entrypoint: "../../../environments/benchmarks/formalqualbench/formalqualbench_env.py"
+      config_file: "native_hyper_validation_env.yaml"
+      metric_key: "selection_score"
+      model: "gpt-5.5"
+      max_iterations: 12
+      timeout_seconds: 21600
+    - name: opengauss-native-formalqualbench-final
+      type: environment
+      split: test
+      provider: "openai-codex"
+      entrypoint: "../../../environments/benchmarks/formalqualbench/formalqualbench_env.py"
+      config_file: "native_hyper_all_env.yaml"
+      metric_key: "selection_score"
+      model: "gpt-5.5"
+      max_iterations: 12
+      timeout_seconds: 43200
+
+protocol:
+  archive_eval_splits: ["train", "validation"]
+  selection_split: validation
+  selection_split_fallback: train
+  staged_evaluation: true
+  preliminary_threshold: 0.0
+  run_mode: normal
+
+execution_policy:
+  preset: balanced
+  evaluate:
+    max_subprocess_timeout_seconds: 43200
+  final_test:
+    max_subprocess_timeout_seconds: 43200
+
+budget:
+  max_outer_iterations: 1
+  max_benchmark_wall_clock_seconds: 43200
+  max_mutation_wall_clock_seconds: 7200
+  benchmark_retry_attempts: 0

@@ -69,6 +69,21 @@ def test_resolve_axle_environment_prefers_project_override_then_config_then_tool
     assert resolved == "project-env"
 
 
+def test_resolve_axle_environment_infers_from_lean_toolchain_before_global_config(tmp_path):
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    (project_root / "lakefile.toml").write_text('name = "demo"\n', encoding="utf-8")
+    (project_root / "lean-toolchain").write_text("leanprover/lean4:v4.28.0\n", encoding="utf-8")
+    initialize_gauss_project(project_root, name="Project Override")
+
+    resolved = resolve_axle_environment(
+        {"gauss": {"lean_service": {"environment": "config-env"}}},
+        cwd=project_root,
+    )
+
+    assert resolved == "lean-4.28.0"
+
+
 def test_resolve_axle_environment_falls_back_to_config_before_tool_arg(tmp_path):
     resolved = resolve_axle_environment(
         {"gauss": {"lean_service": {"environment": "config-env"}}},

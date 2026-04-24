@@ -1,0 +1,48 @@
+name: FormalQualBench Verified8
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: "Runner label or JSON runner list. Use a DigitalOcean self-hosted runner for the full run."
+        required: false
+        default: "self-hosted"
+      run_id:
+        description: "Optional artifact/run id"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  verified8:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 2160
+    env:
+      GAUSS_HOME: ${{ github.workspace }}/.gauss-ci
+      GAUSS_AUTH_JSON_BASE64: ${{ secrets.GAUSS_AUTH_JSON_BASE64 }}
+      RUN_ID: ${{ inputs.run_id || github.run_id }}
+      OUTPUT_ROOT: ${{ github.workspace }}/artifacts/formalqualbench-verified8/${{ inputs.run_id || github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install elan
+        run: |
+          if ! command -v elan >/dev/null 2>&1; then
+            curl -fsSL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain leanprover/lean4:v4.28.0
+          fi
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Run verified8 native OpenGauss benchmark
+        run: scripts/run_formalqualbench_verified8.sh
+
+      - name: Upload benchmark artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: formalqualbench-verified8-${{ inputs.run_id || github.run_id }}
+          path: artifacts/formalqualbench-verified8/${{ inputs.run_id || github.run_id }}
