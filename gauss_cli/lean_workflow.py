@@ -215,6 +215,8 @@ def run_native_lean_workflow(
     session_id: str | None = None,
     session_db: Any = None,
     quiet_mode: bool = True,
+    skip_context_files: bool = False,
+    skip_memory: bool = False,
     tool_progress_callback: Any = None,
 ) -> NativeLeanWorkflowResult:
     plan = prepare_native_lean_workflow(command, cwd=cwd, model=model)
@@ -237,6 +239,8 @@ def run_native_lean_workflow(
             platform="cli",
             session_id=session_id or f"lean-{uuid.uuid4().hex[:10]}",
             session_db=session_db,
+            skip_context_files=skip_context_files,
+            skip_memory=skip_memory,
             reasoning_config={
                 "enabled": True,
                 "effort": str(reasoning_effort or "medium").strip().lower() or "medium",

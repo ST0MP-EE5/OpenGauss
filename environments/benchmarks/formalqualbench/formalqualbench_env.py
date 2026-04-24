@@ -682,6 +682,8 @@ def _run_native_backend(config: EvalConfig, *, command: str, workspace_root: Pat
             reasoning_effort=config.reasoning_effort,
             max_iterations=config.max_agent_turns or 90,
             quiet_mode=True,
+            skip_context_files=True,
+            skip_memory=True,
         )
         return ProcessResult(
             returncode=0 if result.success else 1,

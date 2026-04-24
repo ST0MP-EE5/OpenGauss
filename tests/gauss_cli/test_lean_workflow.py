@@ -52,6 +52,8 @@ def test_run_native_lean_workflow_constructs_codex_agent_with_native_toolset(mon
     assert kwargs["api_mode"] == "codex_responses"
     assert kwargs["reasoning_config"] == {"enabled": True, "effort": "medium"}
     assert kwargs["enabled_toolsets"] == ["opengauss-lean"]
+    assert kwargs["skip_context_files"] is False
+    assert kwargs["skip_memory"] is False
     assert captured["persist_user_message"] == "/autoformalize prove the main theorem"
     assert "do not delegate to external CLIs" in captured["system_message"]
     assert result.final_response == "done"
@@ -78,6 +80,10 @@ def test_run_native_lean_workflow_accepts_reasoning_effort(monkeypatch):
         cwd=lean_workflow.Path(__file__).resolve().parents[2] / "Lean4",
         session_id="sess-native",
         reasoning_effort="high",
+        skip_context_files=True,
+        skip_memory=True,
     )
 
     assert captured["kwargs"]["reasoning_config"] == {"enabled": True, "effort": "high"}
+    assert captured["kwargs"]["skip_context_files"] is True
+    assert captured["kwargs"]["skip_memory"] is True

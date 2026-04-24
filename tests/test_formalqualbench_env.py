@@ -170,6 +170,34 @@ def test_run_one_task_requires_comparator_success(monkeypatch, tmp_path: Path):
     assert comparator_payload["theorem_names"] == ["JordanCycleTheorem.MainTheorem"]
 
 
+def test_native_backend_disables_ambient_context_for_benchmarks(monkeypatch, tmp_path: Path):
+    captured = {}
+
+    def fake_run_native_lean_workflow(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+
+        class Result:
+            success = True
+            final_response = "ok"
+            error = ""
+
+        return Result()
+
+    monkeypatch.setattr(fq, "run_native_lean_workflow", fake_run_native_lean_workflow)
+    config = fq.EvalConfig(model_name="gpt-5.5", reasoning_effort="high")
+
+    result = fq._run_native_backend(config, command="/autoformalize test", workspace_root=tmp_path)
+
+    assert result.returncode == 0
+    assert captured["command"] == "/autoformalize test"
+    assert captured["kwargs"]["cwd"] == tmp_path
+    assert captured["kwargs"]["model"] == "gpt-5.5"
+    assert captured["kwargs"]["reasoning_effort"] == "high"
+    assert captured["kwargs"]["skip_context_files"] is True
+    assert captured["kwargs"]["skip_memory"] is True
+
+
 def test_evaluate_config_writes_summary_with_call_counts_and_artifacts(monkeypatch, tmp_path: Path):
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
