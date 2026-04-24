@@ -9,6 +9,7 @@ This runbook reproduces the eight Comparator-verified FormalQualBench tasks repo
 - Model: `gpt-5.5`
 - Reasoning effort: `high`
 - API mode: `codex_responses`
+- Lean toolchain: `leanprover/lean4:v4.28.0`
 - Benchmark backend: `native`
 - MCP call count: `0`
 - Comparator remains the scoring authority
@@ -33,6 +34,8 @@ The tracked config is:
 ```bash
 environments/benchmarks/formalqualbench/opengauss_verified8.yaml
 ```
+
+That config pins FormalQualBench, Comparator, and `lean4export` to compatible commits. The benchmark runner preflights Comparator and `lean4export` against the FormalQualBench Lean toolchain and refuses to score if the toolchains differ, because `.olean` files are not cross-version portable.
 
 ## GitHub Setup
 

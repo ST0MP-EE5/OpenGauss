@@ -32,6 +32,7 @@ DEFAULT_FORMALQUALBENCH_REPO = "https://github.com/math-inc/FormalQualBench.git"
 DEFAULT_FORMALQUALBENCH_REF = "main"
 DEFAULT_COMPARATOR_REPO = "https://github.com/leanprover/comparator.git"
 DEFAULT_COMPARATOR_REF = "master"
+DEFAULT_LEAN4EXPORT_REF = ""
 DEFAULT_LANDRUN_REPO = "https://github.com/Zouuup/landrun.git"
 DEFAULT_LANDRUN_REF = "main"
 DEFAULT_PERMITTED_AXIOMS = ("propext", "Quot.sound", "Classical.choice")
@@ -71,6 +72,7 @@ class EvalConfig:
     formalqualbench_ref: str = DEFAULT_FORMALQUALBENCH_REF
     comparator_repo: str = DEFAULT_COMPARATOR_REPO
     comparator_ref: str = DEFAULT_COMPARATOR_REF
+    lean4export_ref: str = DEFAULT_LEAN4EXPORT_REF
     landrun_path: str = "landrun"
     cache_root: Path | None = None
     output_root: Path | None = None
@@ -172,6 +174,7 @@ def load_eval_config(config_path: Path, cli_overrides: dict[str, str] | None = N
         formalqualbench_ref=str(env_cfg.get("formalqualbench_ref", DEFAULT_FORMALQUALBENCH_REF)),
         comparator_repo=str(env_cfg.get("comparator_repo", DEFAULT_COMPARATOR_REPO)),
         comparator_ref=str(env_cfg.get("comparator_ref", DEFAULT_COMPARATOR_REF)),
+        lean4export_ref=str(env_cfg.get("lean4export_ref", DEFAULT_LEAN4EXPORT_REF) or "").strip(),
         landrun_path=str(env_cfg.get("landrun_path", "landrun")),
         cache_root=Path(cache_root).expanduser().resolve() if cache_root else None,
         output_root=Path(output_root).expanduser().resolve() if output_root else None,
@@ -188,6 +191,23 @@ def load_eval_config(config_path: Path, cli_overrides: dict[str, str] | None = N
         system_prompt=str(env_cfg.get("system_prompt") or "").strip(),
     )
     return config
+
+
+def _read_lean_toolchain(project_root: Path) -> str:
+    toolchain_path = project_root / "lean-toolchain"
+    if not toolchain_path.is_file():
+        raise RuntimeError(f"Lean toolchain file not found: {toolchain_path}")
+    return toolchain_path.read_text(encoding="utf-8").strip()
+
+
+def _assert_matching_lean_toolchain(component: str, project_root: Path, expected_toolchain: str) -> str:
+    actual_toolchain = _read_lean_toolchain(project_root)
+    if actual_toolchain != expected_toolchain:
+        raise RuntimeError(
+            f"{component} Lean toolchain mismatch: expected {expected_toolchain!r} "
+            f"to match FormalQualBench, got {actual_toolchain!r} at {project_root / 'lean-toolchain'}."
+        )
+    return actual_toolchain
 
 
 def _discover_override_bundle() -> OverrideBundle:
@@ -401,6 +421,59 @@ def _find_comparator_binary(repo_root: Path) -> Path:
     raise RuntimeError(f"Comparator binary not found under {repo_root}")
 
 
+def _pin_lake_manifest_package(project_root: Path, package_name: str, revision: str) -> bool:
+    revision = str(revision or "").strip()
+    if not revision:
+        return False
+    manifest_path = project_root / "lake-manifest.json"
+    if not manifest_path.is_file():
+        raise RuntimeError(f"Lake manifest not found under {project_root}")
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    packages = payload.get("packages")
+    if not isinstance(packages, list):
+        raise RuntimeError(f"Lake manifest has no package list: {manifest_path}")
+
+    changed = False
+    found = False
+    for package in packages:
+        if not isinstance(package, dict) or package.get("name") != package_name:
+            continue
+        found = True
+        if package.get("rev") != revision:
+            package["rev"] = revision
+            changed = True
+        if package.get("inputRev") != revision:
+            package["inputRev"] = revision
+            changed = True
+    if not found:
+        raise RuntimeError(f"Package {package_name!r} not found in {manifest_path}")
+    if changed:
+        manifest_path.write_text(json.dumps(payload, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    return changed
+
+
+def _remove_lake_package_checkout(project_root: Path, package_name: str) -> None:
+    manifest_path = project_root / "lake-manifest.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    packages_dir = Path(payload.get("packagesDir") or ".lake/packages")
+    package_root = project_root / packages_dir / package_name
+    if package_root.exists():
+        shutil.rmtree(package_root)
+
+
+def _apply_comparator_dependency_pins(config: EvalConfig, comparator_root: Path) -> None:
+    if not config.lean4export_ref:
+        return
+    if _pin_lake_manifest_package(comparator_root, "lean4export", config.lean4export_ref):
+        _remove_lake_package_checkout(comparator_root, "lean4export")
+
+
+def _remove_lake_build_outputs(project_root: Path) -> None:
+    build_root = project_root / ".lake" / "build"
+    if build_root.exists():
+        shutil.rmtree(build_root)
+
+
 def _ensure_landrun_binary(config: EvalConfig, cache_root: Path) -> Path:
     requested = str(config.landrun_path or "").strip()
     if requested:
@@ -435,10 +508,11 @@ def _ensure_landrun_binary(config: EvalConfig, cache_root: Path) -> Path:
     return binary.resolve()
 
 
-def _ensure_lean4export_binary(comparator_root: Path) -> Path:
+def _ensure_lean4export_binary(comparator_root: Path, *, expected_lean_toolchain: str) -> Path:
     package_root = comparator_root / ".lake" / "packages" / "lean4export"
     if not package_root.is_dir():
         raise RuntimeError(f"lean4export package not found under comparator checkout: {package_root}")
+    _assert_matching_lean_toolchain("lean4export", package_root, expected_lean_toolchain)
 
     binary = package_root / ".lake" / "build" / "bin" / "lean4export"
     if binary.is_file() and os.access(binary, os.X_OK):
@@ -452,19 +526,30 @@ def _ensure_lean4export_binary(comparator_root: Path) -> Path:
     return binary.resolve()
 
 
-def _ensure_comparator_toolchain(config: EvalConfig, cache_root: Path) -> ComparatorToolchain:
+def _ensure_comparator_toolchain(
+    config: EvalConfig,
+    cache_root: Path,
+    *,
+    expected_lean_toolchain: str,
+) -> ComparatorToolchain:
     comparator_root = _ensure_git_checkout(
         config.comparator_repo,
         config.comparator_ref,
         cache_root / "comparator",
     )
+    _assert_matching_lean_toolchain("comparator", comparator_root, expected_lean_toolchain)
+    _apply_comparator_dependency_pins(config, comparator_root)
+    _remove_lake_build_outputs(comparator_root)
     build = _run_checked(["lake", "build", "comparator"], cwd=comparator_root)
     if build.returncode != 0:
         raise RuntimeError(f"Failed to build comparator: {build.stderr or build.stdout}")
     return ComparatorToolchain(
         comparator_binary=_find_comparator_binary(comparator_root),
         landrun_binary=_ensure_landrun_binary(config, cache_root),
-        lean4export_binary=_ensure_lean4export_binary(comparator_root),
+        lean4export_binary=_ensure_lean4export_binary(
+            comparator_root,
+            expected_lean_toolchain=expected_lean_toolchain,
+        ),
     )
 
 
@@ -701,8 +786,13 @@ def evaluate_config(config_path: Path, cli_overrides: dict[str, str] | None = No
         config.formalqualbench_ref,
         cache_root / "formalqualbench",
     )
+    expected_lean_toolchain = _read_lean_toolchain(formalqualbench_root)
     _prime_formalqualbench_cache(formalqualbench_root)
-    toolchain = _ensure_comparator_toolchain(config, cache_root)
+    toolchain = _ensure_comparator_toolchain(
+        config,
+        cache_root,
+        expected_lean_toolchain=expected_lean_toolchain,
+    )
 
     results = [
         _run_one_task(
@@ -727,6 +817,10 @@ def evaluate_config(config_path: Path, cli_overrides: dict[str, str] | None = No
         "backend": config.backend,
         "model": config.model_name,
         "reasoning_effort": config.reasoning_effort,
+        "lean_toolchain": expected_lean_toolchain,
+        "formalqualbench_ref": config.formalqualbench_ref,
+        "comparator_ref": config.comparator_ref,
+        "lean4export_ref": config.lean4export_ref,
         "task_count": len(results),
         "solve_count": solve_count,
         "mean_score": (solve_count / len(results)) if results else 0.0,

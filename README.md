@@ -96,7 +96,7 @@ source .venv/bin/activate
 scripts/run_formalqualbench_verified8.sh
 ```
 
-The tracked config is [opengauss_verified8.yaml](environments/benchmarks/formalqualbench/opengauss_verified8.yaml). It runs `gpt-5.5` with `openai.reasoning_effort: high`. The DigitalOcean/self-hosted runner setup is documented in [formalqualbench-verified8.md](deploy/digitalocean/formalqualbench-verified8.md).
+The tracked config is [opengauss_verified8.yaml](environments/benchmarks/formalqualbench/opengauss_verified8.yaml). It runs `gpt-5.5` with `openai.reasoning_effort: high` and pins FormalQualBench, Comparator, and `lean4export` to Lean `v4.28.0`-compatible commits. The environment refuses to score a run if the Comparator or `lean4export` Lean toolchain differs from the FormalQualBench task toolchain. The DigitalOcean/self-hosted runner setup is documented in [formalqualbench-verified8.md](deploy/digitalocean/formalqualbench-verified8.md).
 
 ## Verification
 

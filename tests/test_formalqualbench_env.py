@@ -38,6 +38,9 @@ def test_verified8_config_uses_native_codex_lane():
     assert config.model_name == "gpt-5.5"
     assert config.reasoning_effort == "high"
     assert config.auth_provider == "openai-codex"
+    assert config.formalqualbench_ref == "efaa113c6a00a79e92842ce541b407d7695d7699"
+    assert config.comparator_ref == "11443b99aa874875225c16b55eaa417442a2bb30"
+    assert config.lean4export_ref == "ca36c44858e2d7ba40996203d2f08a69113d1211"
     assert config.task_filter == (
         "DeBruijnErdos",
         "JordanDerangementTheorem",
@@ -170,12 +173,19 @@ def test_evaluate_config_writes_summary_with_call_counts_and_artifacts(monkeypat
     monkeypatch.setenv(fq.SUMMARY_ENV, str(summary_path))
     monkeypatch.setenv(fq.SAMPLES_ENV, str(samples_path))
     monkeypatch.setattr(fq, "_discover_override_bundle", lambda: fq.OverrideBundle())
-    monkeypatch.setattr(fq, "_ensure_git_checkout", lambda repo_url, revision, destination: destination)
+
+    def fake_git_checkout(repo_url, revision, destination):
+        del repo_url, revision
+        destination.mkdir(parents=True, exist_ok=True)
+        (destination / "lean-toolchain").write_text("leanprover/lean4:v4.28.0\n", encoding="utf-8")
+        return destination
+
+    monkeypatch.setattr(fq, "_ensure_git_checkout", fake_git_checkout)
     monkeypatch.setattr(fq, "_prime_formalqualbench_cache", lambda cached_repo: None)
     monkeypatch.setattr(
         fq,
         "_ensure_comparator_toolchain",
-        lambda config, cache_root: fq.ComparatorToolchain(
+        lambda config, cache_root, expected_lean_toolchain: fq.ComparatorToolchain(
             comparator_binary=cache_root / "comparator",
             landrun_binary=cache_root / "landrun",
             lean4export_binary=cache_root / "lean4export",
@@ -208,6 +218,7 @@ def test_evaluate_config_writes_summary_with_call_counts_and_artifacts(monkeypat
 
     assert summary["system"] == "opengauss-gpt55-direct"
     assert summary["backend"] == "native"
+    assert summary["lean_toolchain"] == "leanprover/lean4:v4.28.0"
     assert summary["task_count"] == 2
     assert summary["solve_count"] == 1
     assert summary["total_bash_call_count"] == 0
@@ -219,6 +230,48 @@ def test_evaluate_config_writes_summary_with_call_counts_and_artifacts(monkeypat
     assert samples_path.exists()
     lines = [json.loads(line) for line in samples_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert len(lines) == 2
+
+
+def test_assert_matching_lean_toolchain_rejects_mismatch(tmp_path: Path):
+    root = tmp_path / "component"
+    root.mkdir()
+    (root / "lean-toolchain").write_text("leanprover/lean4:v4.30.0-rc2\n", encoding="utf-8")
+
+    try:
+        fq._assert_matching_lean_toolchain("lean4export", root, "leanprover/lean4:v4.28.0")
+    except RuntimeError as exc:
+        assert "Lean toolchain mismatch" in str(exc)
+        assert "lean4export" in str(exc)
+    else:
+        raise AssertionError("Expected mismatched Lean toolchain to raise")
+
+
+def test_pin_lake_manifest_package_rewrites_revision(tmp_path: Path):
+    root = tmp_path / "comparator"
+    package_root = root / ".lake" / "packages" / "lean4export"
+    package_root.mkdir(parents=True)
+    manifest = {
+        "version": "1.1.0",
+        "packagesDir": ".lake/packages",
+        "packages": [
+            {
+                "url": "https://github.com/leanprover/lean4export",
+                "type": "git",
+                "rev": "old",
+                "name": "lean4export",
+                "inputRev": "master",
+            }
+        ],
+        "name": "Comparator",
+    }
+    (root / "lake-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    changed = fq._pin_lake_manifest_package(root, "lean4export", "new")
+
+    payload = json.loads((root / "lake-manifest.json").read_text(encoding="utf-8"))
+    assert changed is True
+    assert payload["packages"][0]["rev"] == "new"
+    assert payload["packages"][0]["inputRev"] == "new"
 
 
 def test_run_checked_with_stagnation_times_out_when_no_progress(tmp_path: Path):

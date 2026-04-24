@@ -14,9 +14,10 @@ env:
   stagnation_timeout_seconds: 1800
   stagnation_grace_seconds: 300
   formalqualbench_repo: https://github.com/math-inc/FormalQualBench.git
-  formalqualbench_ref: main
+  formalqualbench_ref: efaa113c6a00a79e92842ce541b407d7695d7699
   comparator_repo: https://github.com/leanprover/comparator.git
-  comparator_ref: master
+  comparator_ref: 11443b99aa874875225c16b55eaa417442a2bb30
+  lean4export_ref: ca36c44858e2d7ba40996203d2f08a69113d1211
   landrun_path: landrun
   auth_provider: openai-codex
 
