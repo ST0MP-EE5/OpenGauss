@@ -7,6 +7,7 @@ This runbook reproduces the eight Comparator-verified FormalQualBench tasks repo
 - Harness/runtime owner: OpenGauss native Lean workflow runner
 - Model provider: `openai-codex`
 - Model: `gpt-5.5`
+- Reasoning effort: `high`
 - API mode: `codex_responses`
 - Benchmark backend: `native`
 - MCP call count: `0`
@@ -74,7 +75,7 @@ Install base dependencies:
 ```bash
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
-  build-essential ca-certificates curl git jq pkg-config unzip xz-utils zstd
+  build-essential ca-certificates curl git golang-go jq pkg-config unzip xz-utils zstd
 ```
 
 Install the GitHub self-hosted runner on the droplet, attach it to `math-inc/OpenGauss`, and give it a label such as:

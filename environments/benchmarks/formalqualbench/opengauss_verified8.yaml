@@ -22,3 +22,4 @@ env:
 
 openai:
   model_name: gpt-5.5
+  reasoning_effort: high

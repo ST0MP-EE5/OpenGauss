@@ -21,6 +21,7 @@ def test_load_eval_config_defaults_to_top3(tmp_path: Path):
     assert config.task_timeout_seconds == 14400
     assert config.stagnation_timeout_seconds == 1800
     assert config.stagnation_grace_seconds == 300
+    assert config.reasoning_effort == "medium"
 
 
 def test_verified8_config_uses_native_codex_lane():
@@ -35,6 +36,7 @@ def test_verified8_config_uses_native_codex_lane():
     assert config.system_name == "opengauss-gpt55-direct-verified8"
     assert config.backend == "native"
     assert config.model_name == "gpt-5.5"
+    assert config.reasoning_effort == "high"
     assert config.auth_provider == "openai-codex"
     assert config.task_filter == (
         "DeBruijnErdos",
@@ -112,6 +114,7 @@ def test_run_one_task_requires_comparator_success(monkeypatch, tmp_path: Path):
 
     def fake_run_native_backend(config, *, command, workspace_root):
         assert config.backend == "native"
+        assert config.reasoning_effort == "medium"
         assert command.startswith("/autoformalize FormalQualBench theorem: JordanCycleTheorem.")
         assert workspace_root.name == "JordanCycleTheorem"
         return fq.ProcessResult(returncode=0, stdout="backend ok", stderr="", duration_seconds=1.0)

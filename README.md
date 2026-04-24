@@ -51,6 +51,7 @@ The native runner constructs an `AIAgent` with:
 
 - provider: `openai-codex`
 - model: `gpt-5.5`
+- reasoning effort: `medium` by default; the verified8 reproducibility lane sets `high`
 - API mode: `codex_responses`
 - toolset: `opengauss-lean`
 
@@ -95,7 +96,7 @@ source .venv/bin/activate
 scripts/run_formalqualbench_verified8.sh
 ```
 
-The tracked config is [opengauss_verified8.yaml](environments/benchmarks/formalqualbench/opengauss_verified8.yaml). The DigitalOcean/self-hosted runner setup is documented in [formalqualbench-verified8.md](deploy/digitalocean/formalqualbench-verified8.md).
+The tracked config is [opengauss_verified8.yaml](environments/benchmarks/formalqualbench/opengauss_verified8.yaml). It runs `gpt-5.5` with `openai.reasoning_effort: high`. The DigitalOcean/self-hosted runner setup is documented in [formalqualbench-verified8.md](deploy/digitalocean/formalqualbench-verified8.md).
 
 ## Verification
 

@@ -210,6 +210,7 @@ def run_native_lean_workflow(
     *,
     cwd: str | Path | None = None,
     model: str | None = None,
+    reasoning_effort: str | None = None,
     max_iterations: int = 90,
     session_id: str | None = None,
     session_db: Any = None,
@@ -236,6 +237,10 @@ def run_native_lean_workflow(
             platform="cli",
             session_id=session_id or f"lean-{uuid.uuid4().hex[:10]}",
             session_db=session_db,
+            reasoning_config={
+                "enabled": True,
+                "effort": str(reasoning_effort or "medium").strip().lower() or "medium",
+            },
             tool_progress_callback=tool_progress_callback,
         )
         result = agent.run_conversation(

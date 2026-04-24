@@ -75,6 +75,7 @@ class EvalConfig:
     cache_root: Path | None = None
     output_root: Path | None = None
     model_name: str = DEFAULT_MODEL
+    reasoning_effort: str = "medium"
     max_agent_turns: int | None = None
     auth_provider: str | None = None
     permitted_axioms: tuple[str, ...] = DEFAULT_PERMITTED_AXIOMS
@@ -136,6 +137,9 @@ def load_eval_config(config_path: Path, cli_overrides: dict[str, str] | None = N
     backend = str(cli_overrides.get("env.backend", env_cfg.get("backend", NATIVE_BACKEND_NAME)) or NATIVE_BACKEND_NAME)
     backend = "native" if backend.strip().lower() in {"native", "direct", "codex"} else backend.strip().lower()
     model_name = str(cli_overrides.get("openai.model_name", openai_cfg.get("model_name", DEFAULT_MODEL)) or DEFAULT_MODEL)
+    reasoning_effort = str(
+        cli_overrides.get("openai.reasoning_effort", openai_cfg.get("reasoning_effort", "medium")) or "medium"
+    ).strip().lower()
     output_root = cli_overrides.get("env.output_root") or env_cfg.get("output_root")
     cache_root = cli_overrides.get("env.cache_root") or env_cfg.get("cache_root")
 
@@ -172,6 +176,7 @@ def load_eval_config(config_path: Path, cli_overrides: dict[str, str] | None = N
         cache_root=Path(cache_root).expanduser().resolve() if cache_root else None,
         output_root=Path(output_root).expanduser().resolve() if output_root else None,
         model_name=model_name,
+        reasoning_effort=reasoning_effort or "medium",
         max_agent_turns=(
             int(cli_overrides["env.max_agent_turns"])
             if "env.max_agent_turns" in cli_overrides and cli_overrides["env.max_agent_turns"]
@@ -565,6 +570,7 @@ def _run_native_backend(config: EvalConfig, *, command: str, workspace_root: Pat
             command,
             cwd=workspace_root,
             model=config.model_name,
+            reasoning_effort=config.reasoning_effort,
             max_iterations=config.max_agent_turns or 90,
             quiet_mode=True,
         )
@@ -719,6 +725,8 @@ def evaluate_config(config_path: Path, cli_overrides: dict[str, str] | None = No
     summary = {
         "system": config.system_name,
         "backend": config.backend,
+        "model": config.model_name,
+        "reasoning_effort": config.reasoning_effort,
         "task_count": len(results),
         "solve_count": solve_count,
         "mean_score": (solve_count / len(results)) if results else 0.0,
