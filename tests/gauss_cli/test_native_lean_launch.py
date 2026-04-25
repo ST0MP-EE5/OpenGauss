@@ -50,3 +50,25 @@ def test_legacy_lean4_launcher_subcommand_is_removed(monkeypatch):
         main_mod.main()
 
     assert exc.value.code == 2
+
+
+def test_bench_formalqual_run_cli_dispatches_native_service(monkeypatch, tmp_path):
+    captured = {}
+    config_path = tmp_path / "formalqual.yaml"
+    config_path.write_text("env: {}\n", encoding="utf-8")
+
+    def fake_cmd_bench(args):
+        captured["bench_suite"] = args.bench_suite
+        captured["formalqual_action"] = args.formalqual_action
+        captured["config"] = args.config
+
+    monkeypatch.setattr(sys, "argv", ["gauss", "bench", "formalqual", "run", "--config", str(config_path)])
+    monkeypatch.setattr(main_mod, "cmd_bench", fake_cmd_bench)
+
+    main_mod.main()
+
+    assert captured == {
+        "bench_suite": "formalqual",
+        "formalqual_action": "run",
+        "config": str(config_path),
+    }

@@ -5,6 +5,7 @@ OpenGauss is a Lean-first workspace for native theorem work. The maintained prod
 - the OpenGauss CLI and project model
 - the native OpenGauss Lean workflow runner
 - AXLE-backed Lean proof-service integration
+- native Lean LSP-style context and Comparator audit services
 - the FormalQualBench benchmark environment
 - Codex auth/runtime support for the direct `openai-codex` model provider
 - MCP adapters for external clients
@@ -64,6 +65,8 @@ The `opengauss-lean` toolset includes:
 - file tools for scoped project edits
 - AXLE proof-service tools
 - local Lean project tools for status, file checks, builds, sorry reports, and verification summaries
+- native Lean context tools: `lean_lsp_diagnostics`, `lean_lsp_goals`, `lean_lsp_hover`, `lean_lsp_definition`, `lean_lsp_references`, `lean_lsp_symbols`, and `lean_proof_context`
+- native Comparator audit: `lean_comparator_check`
 
 AXLE environment resolution is project-first:
 
@@ -94,6 +97,14 @@ For the eight OpenGauss solves reported in the FormalQualBench evaluation, use:
 ```bash
 source .venv/bin/activate
 scripts/run_formalqualbench_verified8.sh
+```
+
+Native campaign entrypoints are also available through the CLI:
+
+```bash
+gauss bench formalqual run --config environments/benchmarks/formalqualbench/opengauss_verified8.yaml
+gauss bench formalqual resume --run-id <run-id-or-artifact-dir>
+gauss bench formalqual summarize --run-id <run-id-or-artifact-dir>
 ```
 
 The tracked config is [opengauss_verified8.yaml](environments/benchmarks/formalqualbench/opengauss_verified8.yaml). It runs `gpt-5.5` with `openai.reasoning_effort: high` and pins FormalQualBench, Comparator, and `lean4export` to Lean `v4.28.0`-compatible commits. The environment refuses to score a run if the Comparator or `lean4export` Lean toolchain differs from the FormalQualBench task toolchain. The DigitalOcean/self-hosted runner setup is documented in [formalqualbench-verified8.md](deploy/digitalocean/formalqualbench-verified8.md).

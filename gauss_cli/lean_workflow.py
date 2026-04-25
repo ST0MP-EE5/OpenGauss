@@ -11,6 +11,7 @@ from typing import Any, Mapping
 
 from gauss_cli.project import GaussProject, discover_gauss_project, format_project_summary
 from gauss_cli.runtime_provider import resolve_runtime_provider
+from gauss_cli.lean_workflow_profiles import get_workflow_profile
 
 DEFAULT_NATIVE_LEAN_MODEL = "gpt-5.5"
 NATIVE_LEAN_PROVIDER = "openai-codex"
@@ -160,18 +161,24 @@ def prepare_native_lean_workflow(
 
 def _build_system_message(plan: NativeLeanWorkflowPlan) -> str:
     project = plan.project
+    profile = get_workflow_profile(plan.spec.workflow_kind)
     return "\n".join(
         [
             "You are the native OpenGauss Lean workflow agent.",
             "OpenGauss owns this workflow loop; do not delegate to external CLIs, MCP, or shell launchers.",
             f"Workflow: {plan.spec.canonical_command}",
+            f"Native workflow profile: {profile.name} - {profile.summary}",
             f"Project root: {project.root}",
             f"Lean root: {project.lean_root}",
-            "Use only the available OpenGauss Lean tools: file tools, AXLE proof-service tools, and native Lean project tools.",
+            "Use only the available OpenGauss Lean tools: file tools, AXLE tools, native Lean project tools, native LSP-style context tools, and Comparator audit tools.",
             "Use lean_project_status first when project state is unclear.",
+            "Use lean_proof_context, lean_lsp_diagnostics, lean_lsp_goals, lean_lsp_symbols, lean_lsp_definition, and lean_lsp_references for Lean context instead of MCP.",
             "Use lean_lake_build or lean_check_file for verification instead of invoking shell commands.",
+            "Use lean_comparator_check as the final proof-audit tool for Challenge.lean/Solution.lean tasks.",
             "Use lean_sorry_report before claiming a theorem or module is complete.",
             "When editing, preserve nearby project style and keep changes scoped to the requested Lean workflow.",
+            "Native profile guidance:",
+            *[f"- {item}" for item in profile.guidance],
             "Finish with a concise status that names changed files and the strongest verification result obtained.",
         ]
     )

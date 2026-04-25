@@ -43,6 +43,11 @@ class TestResolveToolset:
         assert "axle_check" in tools
         assert "lean_project_status" in tools
         assert "lean_lake_build" in tools
+        assert "lean_lsp_diagnostics" in tools
+        assert "lean_lsp_goals" in tools
+        assert "lean_lsp_references" in tools
+        assert "lean_proof_context" in tools
+        assert "lean_comparator_check" in tools
         assert "terminal" not in tools
 
     def test_composite_toolset(self):

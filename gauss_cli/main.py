@@ -1682,6 +1682,56 @@ def cmd_mcp_server(args):
         sys.exit(1)
 
 
+def cmd_bench(args):
+    """Run native OpenGauss benchmark services."""
+    if getattr(args, "bench_suite", None) != "formalqual":
+        print("Error: expected benchmark suite `formalqual`.")
+        sys.exit(2)
+
+    from datetime import datetime, timezone
+
+    from environments.benchmarks.formalqualbench import formalqualbench_env as fq
+
+    action = getattr(args, "formalqual_action", None)
+    try:
+        if action == "run":
+            config_path = Path(args.config).expanduser().resolve()
+            overrides: dict[str, str] = {}
+            run_id = str(getattr(args, "run_id", "") or "").strip()
+            output_root = str(getattr(args, "output_root", "") or "").strip()
+            if output_root:
+                resolved_output = Path(output_root).expanduser().resolve()
+            else:
+                if not run_id:
+                    run_id = datetime.now(timezone.utc).strftime("formalqual-%Y%m%d-%H%M%S")
+                resolved_output = (get_gauss_home() / fq.RUNS_ROOT_SUBDIR / run_id).resolve()
+            overrides["env.output_root"] = str(resolved_output)
+            summary = fq.evaluate_config(config_path, overrides)
+            print(f"FormalQualBench run: {resolved_output.name}")
+            print(f"Artifacts: {summary['artifact_root']}")
+            print(f"Summary: {summary.get('summary_path', resolved_output / 'summary.json')}")
+            print(f"Solved: {summary['solve_count']} / {summary['task_count']}")
+            return
+        if action == "resume":
+            summary = fq.resume_run(args.run_id)
+            print(f"Resumed FormalQualBench run: {args.run_id}")
+            print(f"Artifacts: {summary['artifact_root']}")
+            print(f"Solved: {summary['solve_count']} / {summary['task_count']}")
+            return
+        if action == "summarize":
+            summary = fq.summarize_run(args.run_id)
+            print(f"FormalQualBench summary: {args.run_id}")
+            print(f"Summary: {summary.get('summary_path', '')}")
+            print(f"Solved: {summary['solve_count']} / {summary['task_count']}")
+            return
+    except Exception as exc:
+        print(f"Error: {exc}")
+        sys.exit(1)
+
+    print("Error: expected `run`, `resume`, or `summarize`.")
+    sys.exit(2)
+
+
 def cmd_config(args):
     """Configuration management."""
     from gauss_cli.config import config_command
@@ -1850,7 +1900,15 @@ def _refresh_workflow_runtime(repo_root: Path) -> None:
 
         print("→ Checking native Lean workflow tools...")
         tools = set(resolve_toolset("opengauss-lean"))
-        required_tools = {"axle_check", "lean_project_status", "lean_lake_build", "lean_check_file"}
+        required_tools = {
+            "axle_check",
+            "lean_project_status",
+            "lean_lake_build",
+            "lean_check_file",
+            "lean_lsp_diagnostics",
+            "lean_proof_context",
+            "lean_comparator_check",
+        }
         missing_tools = sorted(required_tools - tools)
         if missing_tools:
             raise RuntimeError(f"missing tools: {', '.join(missing_tools)}")
@@ -2142,7 +2200,7 @@ def _coalesce_session_name_args(argv: list) -> list:
     _SUBCOMMANDS = {
         "chat", "model", "setup", "login", "logout",
         "status", "doctor", "config", "tools",
-        "sessions", "insights", "version", "update", "uninstall", "mcp-server",
+        "sessions", "insights", "version", "update", "uninstall", "mcp-server", "bench",
     }
     _SESSION_FLAGS = {"-c", "--continue", "-r", "--resume"}
 
@@ -2178,6 +2236,7 @@ Examples:
     gauss --query "..."             Run a single native Lean request
     gauss --resume <session_id>     Resume a specific session by ID
     gauss mcp-server                Run the OpenGauss MCP adapter over stdio
+    gauss bench formalqual run --config config.yaml
     gauss setup                     Run setup wizard
     gauss model                     Select default model
     gauss config                    View configuration
@@ -2528,6 +2587,33 @@ For more help on a command:
         help="MCP transport to serve (default: stdio)",
     )
     mcp_server_parser.set_defaults(func=cmd_mcp_server)
+
+    # =========================================================================
+    # bench command
+    # =========================================================================
+    bench_parser = subparsers.add_parser(
+        "bench",
+        help="Run native OpenGauss benchmark services",
+        description="Run native benchmark campaigns without MCP or external agent handoff.",
+    )
+    bench_subparsers = bench_parser.add_subparsers(dest="bench_suite")
+    formalqual_parser = bench_subparsers.add_parser(
+        "formalqual",
+        help="Run FormalQualBench campaigns through the native Lean workflow.",
+    )
+    formalqual_subparsers = formalqual_parser.add_subparsers(dest="formalqual_action")
+
+    formalqual_run = formalqual_subparsers.add_parser("run", help="Run a FormalQualBench campaign.")
+    formalqual_run.add_argument("--config", required=True, help="FormalQualBench YAML config path.")
+    formalqual_run.add_argument("--run-id", help="Optional run ID for ~/.gauss benchmark artifacts.")
+    formalqual_run.add_argument("--output-root", help="Optional explicit artifact output directory.")
+
+    formalqual_resume = formalqual_subparsers.add_parser("resume", help="Resume a FormalQualBench campaign.")
+    formalqual_resume.add_argument("--run-id", required=True, help="Run ID or artifact directory to resume.")
+
+    formalqual_summarize = formalqual_subparsers.add_parser("summarize", help="Summarize an existing campaign.")
+    formalqual_summarize.add_argument("--run-id", required=True, help="Run ID or artifact directory to summarize.")
+    bench_parser.set_defaults(func=cmd_bench)
 
     # =========================================================================
     # config command

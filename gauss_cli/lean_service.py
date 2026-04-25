@@ -25,6 +25,19 @@ DEFAULT_AXLE_URL = "https://axle.axiommath.ai"
 _LEAN_TOOLCHAIN_VERSION_RE = re.compile(r"^(?:leanprover/lean4:)?v?(\d+\.\d+\.\d+)$")
 _SORRY_RE = re.compile(r"\b(?:sorry|admit)\b")
 _LEAN_FILE_EXCLUDED_PARTS = {".git", ".lake", ".gauss", "__pycache__"}
+_LEAN_DECL_RE = re.compile(
+    r"^\s*(?:(?:private|protected|noncomputable|unsafe|partial)\s+)*"
+    r"(theorem|lemma|def|abbrev|axiom|constant|class|structure|inductive|instance)\s+"
+    r"([A-Za-z_][A-Za-z0-9_'.!?]*)\b"
+)
+_LEAN_DIAGNOSTIC_RE = re.compile(
+    r"^(?P<path>.*?\.lean):(?P<line>\d+):(?P<column>\d+):\s*"
+    r"(?P<severity>error|warning|information|info):\s*(?P<message>.*)$"
+)
+_LEAN_IMPORT_RE = re.compile(r"^\s*import\s+(.+?)\s*$")
+_LEAN_NAMESPACE_RE = re.compile(r"^\s*namespace\s+([A-Za-z0-9_'.]+)\b")
+_LEAN_END_RE = re.compile(r"^\s*end(?:\s+([A-Za-z0-9_'.]+))?\b")
+_LEAN_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_'.!?]*")
 
 
 class LeanProofServiceError(RuntimeError):
@@ -112,6 +125,14 @@ class LocalLeanCommandResult:
             "timed_out": self.timed_out,
             "error": self.error,
         }
+
+
+def _decode_process_text(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
 
 
 class LeanProofService(ABC):
@@ -267,6 +288,143 @@ def _lean_file_paths(root: Path) -> list[Path]:
     return sorted(files)
 
 
+def _resolve_project_and_lean_file(
+    *,
+    path: str | Path,
+    cwd: str | Path | None = None,
+) -> tuple[Any, Path]:
+    active_dir = Path(cwd or os.getcwd()).expanduser().resolve()
+    project = discover_gauss_project(active_dir)
+    target = Path(path).expanduser()
+    if not target.is_absolute():
+        target = project.lean_root / target
+    target = target.resolve()
+    try:
+        target.relative_to(project.lean_root)
+    except ValueError as exc:
+        raise LeanProofServiceConfigurationError(
+            f"Lean file is outside project root: {target}",
+            code="invalid_path",
+        ) from exc
+    if not target.is_file():
+        raise LeanProofServiceNotFoundError(f"Lean file not found: {target}")
+    return project, target
+
+
+def _module_name_for_path(path: Path, *, lean_root: Path) -> str:
+    relative = path.relative_to(lean_root).with_suffix("")
+    return ".".join(relative.parts)
+
+
+def _line_text(lines: list[str], line: int) -> str:
+    if line < 1 or line > len(lines):
+        return ""
+    return lines[line - 1]
+
+
+def _extract_identifier_at(lines: list[str], line: int, column: int) -> str:
+    text = _line_text(lines, line)
+    if not text:
+        return ""
+    index = max(0, min(len(text), int(column or 1) - 1))
+    for match in _LEAN_IDENTIFIER_RE.finditer(text):
+        if match.start() <= index <= match.end():
+            return match.group(0)
+    return ""
+
+
+def _imports_for_content(content: str) -> list[str]:
+    imports: list[str] = []
+    for line in content.splitlines():
+        match = _LEAN_IMPORT_RE.match(line)
+        if match:
+            imports.extend(part.strip() for part in match.group(1).split() if part.strip())
+    return imports
+
+
+def _scan_lean_declarations(path: Path, *, lean_root: Path) -> list[dict[str, Any]]:
+    declarations: list[dict[str, Any]] = []
+    namespace_stack: list[str] = []
+    lines = path.read_text(encoding="utf-8").splitlines()
+    for line_number, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        namespace_match = _LEAN_NAMESPACE_RE.match(stripped)
+        if namespace_match:
+            namespace_stack.extend(part for part in namespace_match.group(1).split(".") if part)
+            continue
+
+        end_match = _LEAN_END_RE.match(stripped)
+        if end_match and namespace_stack:
+            end_name = end_match.group(1)
+            pop_count = len([part for part in end_name.split(".") if part]) if end_name else 1
+            for _ in range(pop_count):
+                if namespace_stack:
+                    namespace_stack.pop()
+            continue
+
+        decl_match = _LEAN_DECL_RE.match(stripped)
+        if not decl_match:
+            continue
+        kind, name = decl_match.groups()
+        full_name = name.removeprefix("_root_.")
+        if "." not in full_name and namespace_stack:
+            full_name = ".".join([*namespace_stack, full_name])
+        declarations.append(
+            {
+                "kind": kind,
+                "name": name,
+                "full_name": full_name,
+                "path": str(path),
+                "relative_path": str(path.relative_to(lean_root)),
+                "module": _module_name_for_path(path, lean_root=lean_root),
+                "line": line_number,
+                "column": max(1, line.find(name) + 1),
+                "signature": stripped,
+            }
+        )
+    return declarations
+
+
+def _find_enclosing_declaration(path: Path, *, lean_root: Path, line: int) -> dict[str, Any] | None:
+    candidates = [
+        decl for decl in _scan_lean_declarations(path, lean_root=lean_root)
+        if int(decl["line"]) <= int(line or 1)
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: int(item["line"]))
+
+
+def parse_lean_diagnostics(output: str, *, target_path: Path | None = None) -> list[dict[str, Any]]:
+    """Parse Lean diagnostic lines from `lake env lean` output."""
+    diagnostics: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    for raw_line in str(output or "").splitlines():
+        match = _LEAN_DIAGNOSTIC_RE.match(raw_line)
+        if match:
+            if current:
+                diagnostics.append(current)
+            path_text = match.group("path")
+            current = {
+                "path": path_text,
+                "relative_path": (
+                    Path(path_text).name
+                    if target_path is None
+                    else str(target_path.name if Path(path_text).name == target_path.name else Path(path_text).name)
+                ),
+                "line": int(match.group("line")),
+                "column": int(match.group("column")),
+                "severity": match.group("severity"),
+                "message": match.group("message").strip(),
+            }
+            continue
+        if current and raw_line.strip():
+            current["message"] = f"{current['message']}\n{raw_line}".strip()
+    if current:
+        diagnostics.append(current)
+    return diagnostics
+
+
 def detect_sorries(content: str) -> list[dict[str, Any]]:
     """Return line-level `sorry`/`admit` occurrences in Lean content."""
     findings: list[dict[str, Any]] = []
@@ -373,8 +531,8 @@ def _run_local_lean_command(
             command=command,
             cwd=str(cwd),
             returncode=None,
-            stdout=exc.stdout or "",
-            stderr=exc.stderr or "",
+            stdout=_decode_process_text(exc.stdout),
+            stderr=_decode_process_text(exc.stderr),
             timed_out=True,
             error=f"Timed out after {timeout_seconds}s",
         )
@@ -452,6 +610,351 @@ def local_lean_check_file(
     payload["path"] = str(target)
     payload["relative_path"] = str(target.relative_to(project.lean_root))
     payload["sorries"] = detect_sorries(target.read_text(encoding="utf-8"))
+    return payload
+
+
+def local_lean_lsp_diagnostics(
+    *,
+    path: str | Path,
+    cwd: str | Path | None = None,
+    timeout_seconds: int = 30 * 60,
+) -> dict[str, Any]:
+    """Return Lean diagnostics for a project file through controlled local checks."""
+    project, target = _resolve_project_and_lean_file(path=path, cwd=cwd)
+    check_payload = local_lean_check_file(
+        path=target,
+        cwd=project.root,
+        timeout_seconds=timeout_seconds,
+    )
+    output = "\n".join(
+        part for part in (check_payload.get("stdout", ""), check_payload.get("stderr", "")) if part
+    )
+    diagnostics = parse_lean_diagnostics(output, target_path=target)
+    for item in diagnostics:
+        try:
+            diagnostic_path = Path(str(item.get("path", ""))).resolve()
+            item["relative_path"] = str(diagnostic_path.relative_to(project.lean_root))
+        except (OSError, ValueError):
+            item["relative_path"] = str(target.relative_to(project.lean_root))
+    return {
+        "provider": "local",
+        "source": "lake env lean",
+        "project_root": str(project.root),
+        "lean_root": str(project.lean_root),
+        "path": str(target),
+        "relative_path": str(target.relative_to(project.lean_root)),
+        "success": bool(check_payload.get("success")),
+        "returncode": check_payload.get("returncode"),
+        "timed_out": bool(check_payload.get("timed_out")),
+        "diagnostic_count": len(diagnostics),
+        "diagnostics": diagnostics,
+        "stdout": check_payload.get("stdout", ""),
+        "stderr": check_payload.get("stderr", ""),
+    }
+
+
+def local_lean_lsp_symbols(
+    *,
+    query: str,
+    cwd: str | Path | None = None,
+    path: str | Path | None = None,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Search Lean declarations in the active project or a single file."""
+    active_dir = Path(cwd or (Path(path).expanduser().parent if path else os.getcwd())).expanduser().resolve()
+    project = discover_gauss_project(active_dir)
+    if path is not None and str(path).strip():
+        _, target = _resolve_project_and_lean_file(path=path, cwd=project.root)
+        files = [target]
+    else:
+        files = _lean_file_paths(project.lean_root)
+    needle = str(query or "").strip().lower()
+    matches: list[dict[str, Any]] = []
+    for lean_file in files:
+        for decl in _scan_lean_declarations(lean_file, lean_root=project.lean_root):
+            haystack = " ".join(
+                [
+                    str(decl.get("name", "")),
+                    str(decl.get("full_name", "")),
+                    str(decl.get("signature", "")),
+                ]
+            ).lower()
+            if needle and needle not in haystack:
+                continue
+            matches.append(decl)
+            if len(matches) >= max(1, int(limit or 50)):
+                break
+        if len(matches) >= max(1, int(limit or 50)):
+            break
+    return {
+        "provider": "local",
+        "source": "declaration_index",
+        "project_root": str(project.root),
+        "lean_root": str(project.lean_root),
+        "query": query,
+        "symbol_count": len(matches),
+        "symbols": matches,
+    }
+
+
+def local_lean_lsp_definition(
+    *,
+    path: str | Path,
+    line: int,
+    column: int,
+    cwd: str | Path | None = None,
+    symbol: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """Find likely definition sites for a symbol at a Lean cursor position."""
+    project, target = _resolve_project_and_lean_file(path=path, cwd=cwd)
+    lines = target.read_text(encoding="utf-8").splitlines()
+    resolved_symbol = str(symbol or "").strip() or _extract_identifier_at(lines, int(line or 1), int(column or 1))
+    if not resolved_symbol:
+        return {
+            "provider": "local",
+            "source": "declaration_index",
+            "project_root": str(project.root),
+            "lean_root": str(project.lean_root),
+            "path": str(target),
+            "relative_path": str(target.relative_to(project.lean_root)),
+            "line": int(line or 1),
+            "column": int(column or 1),
+            "symbol": "",
+            "definition_count": 0,
+            "definitions": [],
+        }
+    candidates = local_lean_lsp_symbols(
+        query=resolved_symbol,
+        cwd=project.root,
+        limit=max(50, int(limit or 20) * 4),
+    )["symbols"]
+    exact: list[dict[str, Any]] = []
+    suffix = f".{resolved_symbol}"
+    for candidate in candidates:
+        name = str(candidate.get("name", ""))
+        full_name = str(candidate.get("full_name", ""))
+        if name == resolved_symbol or full_name == resolved_symbol or full_name.endswith(suffix):
+            exact.append(candidate)
+    matches = exact or candidates
+    return {
+        "provider": "local",
+        "source": "declaration_index",
+        "project_root": str(project.root),
+        "lean_root": str(project.lean_root),
+        "path": str(target),
+        "relative_path": str(target.relative_to(project.lean_root)),
+        "line": int(line or 1),
+        "column": int(column or 1),
+        "symbol": resolved_symbol,
+        "definition_count": len(matches[: max(1, int(limit or 20))]),
+        "definitions": matches[: max(1, int(limit or 20))],
+    }
+
+
+def local_lean_lsp_references(
+    *,
+    path: str | Path,
+    line: int,
+    column: int,
+    cwd: str | Path | None = None,
+    symbol: str | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Find project references for the symbol at a Lean cursor position."""
+    project, target = _resolve_project_and_lean_file(path=path, cwd=cwd)
+    lines = target.read_text(encoding="utf-8").splitlines()
+    resolved_symbol = str(symbol or "").strip() or _extract_identifier_at(lines, int(line or 1), int(column or 1))
+    references: list[dict[str, Any]] = []
+    if resolved_symbol:
+        suffix = f".{resolved_symbol}"
+        max_refs = max(1, int(limit or 100))
+        for lean_file in _lean_file_paths(project.lean_root):
+            for line_number, line_text in enumerate(lean_file.read_text(encoding="utf-8").splitlines(), start=1):
+                for match in _LEAN_IDENTIFIER_RE.finditer(line_text):
+                    token = match.group(0)
+                    if token != resolved_symbol and not token.endswith(suffix):
+                        continue
+                    references.append(
+                        {
+                            "path": str(lean_file),
+                            "relative_path": str(lean_file.relative_to(project.lean_root)),
+                            "module": _module_name_for_path(lean_file, lean_root=project.lean_root),
+                            "line": line_number,
+                            "column": match.start() + 1,
+                            "text": line_text.strip(),
+                        }
+                    )
+                    if len(references) >= max_refs:
+                        break
+                if len(references) >= max_refs:
+                    break
+            if len(references) >= max_refs:
+                break
+    return {
+        "provider": "local",
+        "source": "lexical_reference_index",
+        "project_root": str(project.root),
+        "lean_root": str(project.lean_root),
+        "path": str(target),
+        "relative_path": str(target.relative_to(project.lean_root)),
+        "line": int(line or 1),
+        "column": int(column or 1),
+        "symbol": resolved_symbol,
+        "reference_count": len(references),
+        "references": references,
+    }
+
+
+def local_lean_lsp_hover(
+    *,
+    path: str | Path,
+    line: int,
+    column: int,
+    cwd: str | Path | None = None,
+) -> dict[str, Any]:
+    """Return compact hover/type-like information for a Lean cursor position."""
+    project, target = _resolve_project_and_lean_file(path=path, cwd=cwd)
+    lines = target.read_text(encoding="utf-8").splitlines()
+    symbol = _extract_identifier_at(lines, int(line or 1), int(column or 1))
+    definition_payload = local_lean_lsp_definition(
+        path=target,
+        line=int(line or 1),
+        column=int(column or 1),
+        cwd=project.root,
+        symbol=symbol,
+        limit=5,
+    )
+    definitions = definition_payload.get("definitions", [])
+    return {
+        "provider": "local",
+        "source": "declaration_index",
+        "project_root": str(project.root),
+        "lean_root": str(project.lean_root),
+        "path": str(target),
+        "relative_path": str(target.relative_to(project.lean_root)),
+        "line": int(line or 1),
+        "column": int(column or 1),
+        "symbol": symbol,
+        "hover": definitions[0].get("signature", "") if definitions else "",
+        "definitions": definitions,
+    }
+
+
+def local_lean_lsp_goals(
+    *,
+    path: str | Path,
+    line: int,
+    column: int,
+    cwd: str | Path | None = None,
+    context_radius: int = 12,
+) -> dict[str, Any]:
+    """Return local proof-state context near a Lean cursor position.
+
+    This is an OpenGauss-native fallback for useful goal-state affordances. It
+    avoids MCP and shell access; diagnostics come from `lake env lean`, and the
+    local goal context is derived from the enclosing declaration and source.
+    """
+    project, target = _resolve_project_and_lean_file(path=path, cwd=cwd)
+    lines = target.read_text(encoding="utf-8").splitlines()
+    line_number = max(1, int(line or 1))
+    radius = max(1, int(context_radius or 12))
+    start_line = max(1, line_number - radius)
+    end_line = min(len(lines), line_number + radius)
+    source_window = [
+        {
+            "line": index,
+            "text": lines[index - 1],
+            "cursor_line": index == line_number,
+        }
+        for index in range(start_line, end_line + 1)
+    ]
+    enclosing = _find_enclosing_declaration(target, lean_root=project.lean_root, line=line_number)
+    diagnostics_payload = local_lean_lsp_diagnostics(path=target, cwd=project.root, timeout_seconds=30 * 60)
+    relevant_diagnostics = [
+        item for item in diagnostics_payload["diagnostics"]
+        if abs(int(item.get("line", 0)) - line_number) <= radius
+    ]
+    sorries = [
+        {**finding, "relative_path": str(target.relative_to(project.lean_root))}
+        for finding in detect_sorries(target.read_text(encoding="utf-8"))
+        if abs(int(finding["line"]) - line_number) <= radius
+    ]
+    return {
+        "provider": "local",
+        "source": "lean_check_and_source_context",
+        "project_root": str(project.root),
+        "lean_root": str(project.lean_root),
+        "path": str(target),
+        "relative_path": str(target.relative_to(project.lean_root)),
+        "module": _module_name_for_path(target, lean_root=project.lean_root),
+        "line": line_number,
+        "column": int(column or 1),
+        "enclosing_declaration": enclosing,
+        "source_window": source_window,
+        "diagnostics": relevant_diagnostics,
+        "sorries": sorries,
+        "goal_state_available": False,
+        "goal_state_note": (
+            "Native OpenGauss goal context is derived from Lean diagnostics and local source. "
+            "It does not call lean-lsp-mcp."
+        ),
+    }
+
+
+def local_lean_proof_context(
+    *,
+    path: str | Path,
+    cwd: str | Path | None = None,
+    line: int | None = None,
+    column: int | None = None,
+) -> dict[str, Any]:
+    """Return a compact combined Lean proof context for workflow prompts."""
+    project, target = _resolve_project_and_lean_file(path=path, cwd=cwd)
+    content = target.read_text(encoding="utf-8")
+    diagnostics = local_lean_lsp_diagnostics(path=target, cwd=project.root)
+    sorry_findings = detect_sorries(content)
+    payload: dict[str, Any] = {
+        "provider": "local",
+        "source": "combined_native_context",
+        "project_root": str(project.root),
+        "lean_root": str(project.lean_root),
+        "path": str(target),
+        "relative_path": str(target.relative_to(project.lean_root)),
+        "module": _module_name_for_path(target, lean_root=project.lean_root),
+        "imports": _imports_for_content(content),
+        "diagnostics": diagnostics["diagnostics"],
+        "diagnostic_count": diagnostics["diagnostic_count"],
+        "sorries": sorry_findings,
+        "sorry_count": len(sorry_findings),
+        "symbols": _scan_lean_declarations(target, lean_root=project.lean_root),
+    }
+    if line is not None and column is not None:
+        payload["goals"] = local_lean_lsp_goals(
+            path=target,
+            line=int(line),
+            column=int(column),
+            cwd=project.root,
+        )
+        payload["hover"] = local_lean_lsp_hover(
+            path=target,
+            line=int(line),
+            column=int(column),
+            cwd=project.root,
+        )
+        payload["definition"] = local_lean_lsp_definition(
+            path=target,
+            line=int(line),
+            column=int(column),
+            cwd=project.root,
+        )
+        payload["references"] = local_lean_lsp_references(
+            path=target,
+            line=int(line),
+            column=int(column),
+            cwd=project.root,
+            limit=20,
+        )
     return payload
 
 

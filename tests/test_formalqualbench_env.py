@@ -21,7 +21,7 @@ def test_load_eval_config_defaults_to_top3(tmp_path: Path):
     assert config.task_timeout_seconds == 14400
     assert config.stagnation_timeout_seconds == 1800
     assert config.stagnation_grace_seconds == 300
-    assert config.reasoning_effort == "medium"
+    assert config.reasoning_effort == "high"
 
 
 def test_verified8_config_uses_native_codex_lane():
@@ -135,7 +135,7 @@ def test_run_one_task_requires_comparator_success(monkeypatch, tmp_path: Path):
 
     def fake_run_native_backend(config, *, command, workspace_root):
         assert config.backend == "native"
-        assert config.reasoning_effort == "medium"
+        assert config.reasoning_effort == "high"
         assert command.startswith("/autoformalize FormalQualBench theorem: JordanCycleTheorem.")
         assert workspace_root.name == "JordanCycleTheorem"
         return fq.ProcessResult(returncode=0, stdout="backend ok", stderr="", duration_seconds=1.0)
@@ -269,13 +269,163 @@ def test_evaluate_config_writes_summary_with_call_counts_and_artifacts(monkeypat
     assert summary["solve_count"] == 1
     assert summary["total_bash_call_count"] == 0
     assert summary["total_mcp_call_count"] == 0
+    assert summary["native_counters"]["mcp_call_count"] == 0
+    assert summary["total_local_build_call_count"] == 0
+    assert summary["total_comparator_call_count"] == 0
     assert summary["total_tool_call_count"] == 0
     assert summary["selection_score"] == 999988000.0
     assert summary["artifact_root"] == str(summary_path.parent)
     assert summary_path.exists()
     assert samples_path.exists()
+    run_config = json.loads((summary_path.parent / "run_config.resolved.json").read_text(encoding="utf-8"))
+    assert run_config["model_name"] == "gpt-5.5"
+    assert run_config["mcp_call_count"] == 0
     lines = [json.loads(line) for line in samples_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert len(lines) == 2
+
+
+def test_evaluate_config_continues_after_task_exception(monkeypatch, tmp_path: Path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "env": {
+                    "system_name": "opengauss-gpt55-direct",
+                    "backend": "native",
+                    "task_filter": ["FirstTask", "SecondTask"],
+                    "output_root": str(tmp_path / "run"),
+                },
+                "openai": {"model_name": "gpt-5.5"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(fq, "_discover_override_bundle", lambda: fq.OverrideBundle())
+
+    def fake_git_checkout(repo_url, revision, destination):
+        del repo_url, revision
+        destination.mkdir(parents=True, exist_ok=True)
+        (destination / "lean-toolchain").write_text("leanprover/lean4:v4.28.0\n", encoding="utf-8")
+        return destination
+
+    monkeypatch.setattr(fq, "_ensure_git_checkout", fake_git_checkout)
+    monkeypatch.setattr(fq, "_prime_formalqualbench_cache", lambda cached_repo: None)
+    monkeypatch.setattr(
+        fq,
+        "_ensure_comparator_toolchain",
+        lambda config, cache_root, expected_lean_toolchain: fq.ComparatorToolchain(
+            comparator_binary=cache_root / "comparator",
+            landrun_binary=cache_root / "landrun",
+            lean4export_binary=cache_root / "lean4export",
+        ),
+    )
+
+    def fake_run_one_task(config, *, cached_repo, toolchain, output_root, task_name, bundle):
+        del config, cached_repo, toolchain, bundle
+        if task_name == "FirstTask":
+            raise RuntimeError("boom")
+        artifact_dir = output_root / "artifacts" / task_name
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        return {
+            "task_name": task_name,
+            "comparator_valid": True,
+            "score": 1.0,
+            "wall_clock_seconds": 3.0,
+            "native_counters": fq._native_counter_defaults(),
+            "bash_call_count": 0,
+            "mcp_call_count": 0,
+        }
+
+    monkeypatch.setattr(fq, "_run_one_task", fake_run_one_task)
+
+    summary = fq.evaluate_config(config_path)
+
+    assert summary["task_count"] == 2
+    assert summary["solve_count"] == 1
+    first = summary["results"][0]
+    second = summary["results"][1]
+    assert first["task_name"] == "FirstTask"
+    assert first["failure_kind"] == "task_exception"
+    assert first["mcp_call_count"] == 0
+    assert second["task_name"] == "SecondTask"
+    assert (tmp_path / "run" / "artifacts" / "FirstTask" / "result.json").is_file()
+
+
+def test_resume_run_skips_completed_task(monkeypatch, tmp_path: Path):
+    config_path = tmp_path / "config.yaml"
+    output_root = tmp_path / "run"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "env": {
+                    "system_name": "opengauss-gpt55-direct",
+                    "backend": "native",
+                    "task_filter": ["DoneTask", "TodoTask"],
+                    "output_root": str(output_root),
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    output_root.mkdir()
+    fq._write_json(
+        output_root / "run_config.resolved.json",
+        {
+            **fq._eval_config_payload(fq.load_eval_config(config_path), config_path=config_path),
+            "lean_toolchain": "leanprover/lean4:v4.28.0",
+        },
+    )
+    done_dir = output_root / "artifacts" / "DoneTask"
+    done_dir.mkdir(parents=True)
+    fq._write_json(
+        done_dir / "result.json",
+        {
+            "task_name": "DoneTask",
+            "comparator_valid": True,
+            "score": 1.0,
+            "wall_clock_seconds": 1.0,
+            "native_counters": fq._native_counter_defaults(),
+            "bash_call_count": 0,
+            "mcp_call_count": 0,
+        },
+    )
+    monkeypatch.setattr(fq, "_discover_override_bundle", lambda: fq.OverrideBundle())
+    monkeypatch.setattr(fq, "_ensure_git_checkout", lambda repo_url, revision, destination: destination)
+    monkeypatch.setattr(fq, "_read_lean_toolchain", lambda root: "leanprover/lean4:v4.28.0")
+    monkeypatch.setattr(fq, "_prime_formalqualbench_cache", lambda cached_repo: None)
+    monkeypatch.setattr(
+        fq,
+        "_ensure_comparator_toolchain",
+        lambda config, cache_root, expected_lean_toolchain: fq.ComparatorToolchain(
+            comparator_binary=cache_root / "comparator",
+            landrun_binary=cache_root / "landrun",
+            lean4export_binary=cache_root / "lean4export",
+        ),
+    )
+    seen: list[str] = []
+
+    def fake_run_one_task(config, *, cached_repo, toolchain, output_root, task_name, bundle):
+        del config, cached_repo, toolchain, output_root, bundle
+        seen.append(task_name)
+        return {
+            "task_name": task_name,
+            "comparator_valid": False,
+            "score": 0.0,
+            "wall_clock_seconds": 2.0,
+            "native_counters": fq._native_counter_defaults(),
+            "bash_call_count": 0,
+            "mcp_call_count": 0,
+        }
+
+    monkeypatch.setattr(fq, "_run_one_task", fake_run_one_task)
+
+    summary = fq.resume_run(output_root)
+
+    assert seen == ["TodoTask"]
+    assert [item["task_name"] for item in summary["results"]] == ["DoneTask", "TodoTask"]
+    assert summary["total_mcp_call_count"] == 0
 
 
 def test_assert_matching_lean_toolchain_rejects_mismatch(tmp_path: Path):

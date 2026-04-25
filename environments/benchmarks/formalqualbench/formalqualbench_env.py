@@ -3,12 +3,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +18,10 @@ if str(_repo_root) not in sys.path:
     sys.path.insert(0, str(_repo_root))
 
 from gauss_cli.lean_workflow import run_native_lean_workflow  # noqa: E402
+from gauss_cli.lean_comparator import (  # noqa: E402
+    comparator_config_payload as _native_comparator_config_payload,
+    extract_theorem_names as _native_extract_theorem_names,
+)
 from gauss_cli.project import initialize_gauss_project  # noqa: E402
 from gauss_cli.config import get_gauss_home  # noqa: E402
 
@@ -42,6 +45,16 @@ DEFAULT_MODEL = "gpt-5.5"
 NATIVE_BACKEND_NAME = "native"
 OVERRIDE_BUNDLE_SUBDIR = Path("workspace") / "opengauss_formalqualbench"
 OVERRIDE_BUNDLE_ROOT_ENV = "GAUSS_AUTOFORMALIZE_OVERRIDE_BUNDLE_ROOT"
+RUNS_ROOT_SUBDIR = Path("benchmarks") / "formalqualbench" / "runs"
+NATIVE_COUNTER_KEYS = (
+    "model_call_count",
+    "lean_lsp_call_count",
+    "axle_call_count",
+    "local_build_call_count",
+    "comparator_call_count",
+    "bash_call_count",
+    "mcp_call_count",
+)
 
 
 @dataclass(slots=True)
@@ -77,7 +90,7 @@ class EvalConfig:
     cache_root: Path | None = None
     output_root: Path | None = None
     model_name: str = DEFAULT_MODEL
-    reasoning_effort: str = "medium"
+    reasoning_effort: str = "high"
     max_agent_turns: int | None = None
     auth_provider: str | None = None
     permitted_axioms: tuple[str, ...] = DEFAULT_PERMITTED_AXIOMS
@@ -94,6 +107,7 @@ class ProcessResult:
     timed_out: bool = False
     idle_timed_out: bool = False
     error: str | None = None
+    counters: dict[str, int] = field(default_factory=dict)
 
 
 def _decode_process_text(value: str | bytes | None) -> str:
@@ -138,6 +152,62 @@ def _parse_cli_overrides(argv: list[str]) -> dict[str, str]:
     return overrides
 
 
+def _native_counter_defaults() -> dict[str, int]:
+    return {key: 0 for key in NATIVE_COUNTER_KEYS}
+
+
+def _merge_native_counters(*payloads: dict[str, Any] | None) -> dict[str, int]:
+    merged = _native_counter_defaults()
+    for payload in payloads:
+        if not payload:
+            continue
+        for key in NATIVE_COUNTER_KEYS:
+            try:
+                merged[key] += int(payload.get(key, 0) or 0)
+            except (TypeError, ValueError):
+                continue
+    return merged
+
+
+def _workflow_message_counters(messages: list[dict[str, Any]]) -> dict[str, int]:
+    counters = _native_counter_defaults()
+    counters["model_call_count"] = sum(1 for item in messages if item.get("role") == "assistant")
+    for item in messages:
+        text = json.dumps(item, ensure_ascii=False)
+        if "lean_lsp_" in text or "lean_proof_context" in text:
+            counters["lean_lsp_call_count"] += 1
+        if "axle_" in text:
+            counters["axle_call_count"] += 1
+        if "lean_lake_build" in text or "lean_check_file" in text:
+            counters["local_build_call_count"] += 1
+        if "lean_comparator_check" in text:
+            counters["comparator_call_count"] += 1
+    counters["bash_call_count"] = 0
+    counters["mcp_call_count"] = 0
+    return counters
+
+
+def _json_safe_value(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, tuple):
+        return [_json_safe_value(item) for item in value]
+    if isinstance(value, list):
+        return [_json_safe_value(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _json_safe_value(item) for key, item in value.items()}
+    return value
+
+
+def _eval_config_payload(config: EvalConfig, *, config_path: Path | None = None) -> dict[str, Any]:
+    payload = {item.name: _json_safe_value(getattr(config, item.name)) for item in fields(EvalConfig)}
+    if config_path is not None:
+        payload["source_config_path"] = str(config_path)
+    payload["native_counter_keys"] = list(NATIVE_COUNTER_KEYS)
+    payload["mcp_call_count"] = 0
+    return payload
+
+
 def load_eval_config(config_path: Path, cli_overrides: dict[str, str] | None = None) -> EvalConfig:
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     env_cfg = payload.get("env", {}) or {}
@@ -148,7 +218,7 @@ def load_eval_config(config_path: Path, cli_overrides: dict[str, str] | None = N
     backend = "native" if backend.strip().lower() in {"native", "direct", "codex"} else backend.strip().lower()
     model_name = str(cli_overrides.get("openai.model_name", openai_cfg.get("model_name", DEFAULT_MODEL)) or DEFAULT_MODEL)
     reasoning_effort = str(
-        cli_overrides.get("openai.reasoning_effort", openai_cfg.get("reasoning_effort", "medium")) or "medium"
+        cli_overrides.get("openai.reasoning_effort", openai_cfg.get("reasoning_effort", "high")) or "high"
     ).strip().lower()
     output_root = cli_overrides.get("env.output_root") or env_cfg.get("output_root")
     cache_root = cli_overrides.get("env.cache_root") or env_cfg.get("cache_root")
@@ -187,7 +257,7 @@ def load_eval_config(config_path: Path, cli_overrides: dict[str, str] | None = N
         cache_root=Path(cache_root).expanduser().resolve() if cache_root else None,
         output_root=Path(output_root).expanduser().resolve() if output_root else None,
         model_name=model_name,
-        reasoning_effort=reasoning_effort or "medium",
+        reasoning_effort=reasoning_effort or "high",
         max_agent_turns=(
             int(cli_overrides["env.max_agent_turns"])
             if "env.max_agent_turns" in cli_overrides and cli_overrides["env.max_agent_turns"]
@@ -604,32 +674,7 @@ def _build_backend_instruction(config: EvalConfig, task_name: str, theorem_hint:
 
 
 def _extract_theorem_names(challenge_path: Path) -> list[str]:
-    namespace_stack: list[str] = []
-    for line in challenge_path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        namespace_match = re.match(r"namespace\s+([A-Za-z0-9_'.]+)\b", stripped)
-        if namespace_match:
-            namespace_stack.extend(part for part in namespace_match.group(1).split(".") if part)
-            continue
-
-        theorem_match = re.match(r"(?:theorem|lemma)\s+([A-Za-z0-9_'.]+)\b", stripped)
-        if theorem_match:
-            theorem_name = theorem_match.group(1)
-            if "." in theorem_name:
-                return [theorem_name.removeprefix("_root_.")]
-            return [".".join([*namespace_stack, theorem_name]) if namespace_stack else theorem_name]
-
-        end_match = re.match(r"end(?:\s+([A-Za-z0-9_'.]+))?\b", stripped)
-        if end_match and namespace_stack:
-            end_name = end_match.group(1)
-            if end_name:
-                for _ in [part for part in end_name.split(".") if part]:
-                    if namespace_stack:
-                        namespace_stack.pop()
-            else:
-                namespace_stack.pop()
-
-    raise RuntimeError(f"Could not find theorem name in {challenge_path}")
+    return _native_extract_theorem_names(challenge_path)
 
 
 def _write_json(path: Path, payload: Any) -> Path:
@@ -669,13 +714,13 @@ def _prepare_task_workspace(cached_repo: Path, output_root: Path, task_name: str
 
 
 def _comparator_config_payload(config: EvalConfig, theorem_names: list[str]) -> dict[str, Any]:
-    return {
-        "challenge_module": "Challenge",
-        "solution_module": "Solution",
-        "theorem_names": theorem_names,
-        "permitted_axioms": list(config.permitted_axioms),
-        "enable_nanoda": bool(config.enable_nanoda),
-    }
+    return _native_comparator_config_payload(
+        challenge_module="Challenge",
+        solution_module="Solution",
+        theorem_names=theorem_names,
+        permitted_axioms=config.permitted_axioms,
+        enable_nanoda=config.enable_nanoda,
+    )
 
 
 def _run_native_backend(config: EvalConfig, *, command: str, workspace_root: Path) -> ProcessResult:
@@ -693,12 +738,14 @@ def _run_native_backend(config: EvalConfig, *, command: str, workspace_root: Pat
             skip_context_files=True,
             skip_memory=True,
         )
+        messages = list(getattr(result, "messages", []) or [])
         return ProcessResult(
             returncode=0 if result.success else 1,
             stdout=result.final_response or "",
             stderr=result.error or "",
             duration_seconds=round(time.time() - start, 3),
             error=result.error or None,
+            counters=_workflow_message_counters(messages),
         )
     except Exception as exc:
         return ProcessResult(
@@ -707,6 +754,7 @@ def _run_native_backend(config: EvalConfig, *, command: str, workspace_root: Pat
             stderr=str(exc),
             duration_seconds=round(time.time() - start, 3),
             error=str(exc),
+            counters=_native_counter_defaults(),
         )
     finally:
         if previous_terminal_cwd is None:
@@ -766,14 +814,23 @@ def _run_one_task(
     (artifact_dir / "lake_build.stderr.log").write_text(lake_result.stderr, encoding="utf-8")
     (artifact_dir / "comparator.stdout.log").write_text(comparator_result.stdout, encoding="utf-8")
     (artifact_dir / "comparator.stderr.log").write_text(comparator_result.stderr, encoding="utf-8")
+    if solution_path.is_file():
+        shutil.copy2(solution_path, artifact_dir / "Solution.lean")
 
     comparator_valid = comparator_result.returncode == 0 and not comparator_result.timed_out
     total_duration = round(
         backend_result.duration_seconds + lake_result.duration_seconds + comparator_result.duration_seconds,
         3,
     )
-    bash_call_count = 0
-    mcp_call_count = 0
+    native_counters = _merge_native_counters(
+        backend_result.counters,
+        {
+            "local_build_call_count": 1,
+            "comparator_call_count": 1,
+            "bash_call_count": 0,
+            "mcp_call_count": 0,
+        },
+    )
     result = {
         "task_name": task_name,
         "backend": config.backend,
@@ -794,8 +851,8 @@ def _run_one_task(
         "comparator_valid": comparator_valid,
         "score": 1.0 if comparator_valid else 0.0,
         "wall_clock_seconds": total_duration,
-        "bash_call_count": bash_call_count,
-        "mcp_call_count": mcp_call_count,
+        "native_counters": native_counters,
+        **native_counters,
         "backend_stdout_path": str(artifact_dir / "backend.stdout.log"),
         "backend_stderr_path": str(artifact_dir / "backend.stderr.log"),
         "lake_build_stdout_path": str(artifact_dir / "lake_build.stdout.log"),
@@ -803,15 +860,156 @@ def _run_one_task(
         "comparator_stdout_path": str(artifact_dir / "comparator.stdout.log"),
         "comparator_stderr_path": str(artifact_dir / "comparator.stderr.log"),
         "comparator_config_path": str(comparator_config_path),
+        "final_solution_path": str(artifact_dir / "Solution.lean"),
     }
     _write_json(artifact_dir / "result.json", result)
     return result
 
 
-def evaluate_config(config_path: Path, cli_overrides: dict[str, str] | None = None) -> dict[str, Any]:
+def _load_existing_task_result(output_root: Path, task_name: str) -> dict[str, Any] | None:
+    result_path = output_root / "artifacts" / task_name / "result.json"
+    if not result_path.is_file():
+        return None
+    return json.loads(result_path.read_text(encoding="utf-8"))
+
+
+def _write_failed_task_result(
+    config: EvalConfig,
+    *,
+    output_root: Path,
+    task_name: str,
+    exc: Exception,
+) -> dict[str, Any]:
+    artifact_dir = output_root / "artifacts" / task_name
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    error_text = f"{type(exc).__name__}: {exc}"
+    for filename, contents in {
+        "backend.stdout.log": "",
+        "backend.stderr.log": error_text,
+        "lake_build.stdout.log": "",
+        "lake_build.stderr.log": "",
+        "comparator.stdout.log": "",
+        "comparator.stderr.log": "",
+    }.items():
+        (artifact_dir / filename).write_text(contents, encoding="utf-8")
+    comparator_config_path = artifact_dir / "comparator_config.json"
+    if not comparator_config_path.exists():
+        _write_json(
+            comparator_config_path,
+            _native_comparator_config_payload(
+                challenge_module="Challenge",
+                solution_module="Solution",
+                theorem_names=[],
+                permitted_axioms=config.permitted_axioms,
+                enable_nanoda=config.enable_nanoda,
+            ),
+        )
+    native_counters = _native_counter_defaults()
+    result = {
+        "task_name": task_name,
+        "backend": config.backend,
+        "system": config.system_name,
+        "workspace_root": str(output_root / "workspaces" / task_name),
+        "artifact_dir": str(artifact_dir),
+        "challenge_path": str(output_root / "workspaces" / task_name / "Challenge.lean"),
+        "solution_path": str(output_root / "workspaces" / task_name / "Solution.lean"),
+        "theorem_names": [],
+        "backend_returncode": None,
+        "backend_timed_out": False,
+        "backend_idle_timed_out": False,
+        "backend_error": error_text,
+        "lake_build_returncode": None,
+        "lake_build_timed_out": False,
+        "comparator_returncode": None,
+        "comparator_timed_out": False,
+        "comparator_valid": False,
+        "score": 0.0,
+        "wall_clock_seconds": 0.0,
+        "native_counters": native_counters,
+        **native_counters,
+        "backend_stdout_path": str(artifact_dir / "backend.stdout.log"),
+        "backend_stderr_path": str(artifact_dir / "backend.stderr.log"),
+        "lake_build_stdout_path": str(artifact_dir / "lake_build.stdout.log"),
+        "lake_build_stderr_path": str(artifact_dir / "lake_build.stderr.log"),
+        "comparator_stdout_path": str(artifact_dir / "comparator.stdout.log"),
+        "comparator_stderr_path": str(artifact_dir / "comparator.stderr.log"),
+        "comparator_config_path": str(comparator_config_path),
+        "final_solution_path": str(artifact_dir / "Solution.lean"),
+        "failure_kind": "task_exception",
+    }
+    _write_json(artifact_dir / "result.json", result)
+    return result
+
+
+def _write_run_config(output_root: Path, config: EvalConfig, *, config_path: Path) -> Path:
+    return _write_json(output_root / "run_config.resolved.json", _eval_config_payload(config, config_path=config_path))
+
+
+def _build_summary(
+    *,
+    config: EvalConfig,
+    results: list[dict[str, Any]],
+    output_root: Path,
+    lean_toolchain: str = "",
+) -> dict[str, Any]:
+    solve_count = sum(1 for item in results if item.get("comparator_valid"))
+    total_wall_clock_seconds = round(sum(float(item.get("wall_clock_seconds", 0.0) or 0.0) for item in results), 3)
+    total_counters = _native_counter_defaults()
+    for item in results:
+        total_counters = _merge_native_counters(total_counters, item.get("native_counters") or item)
+    total_tool_call_count = (
+        total_counters["lean_lsp_call_count"]
+        + total_counters["axle_call_count"]
+        + total_counters["local_build_call_count"]
+        + total_counters["comparator_call_count"]
+        + total_counters["bash_call_count"]
+        + total_counters["mcp_call_count"]
+    )
+    selection_score = round((solve_count * 1_000_000_000.0) - (total_wall_clock_seconds * 1_000.0) - total_tool_call_count, 3)
+    return {
+        "system": config.system_name,
+        "backend": config.backend,
+        "model": config.model_name,
+        "reasoning_effort": config.reasoning_effort,
+        "lean_toolchain": lean_toolchain,
+        "formalqualbench_ref": config.formalqualbench_ref,
+        "comparator_ref": config.comparator_ref,
+        "lean4export_ref": config.lean4export_ref,
+        "task_count": len(results),
+        "solve_count": solve_count,
+        "mean_score": (solve_count / len(results)) if results else 0.0,
+        "total_wall_clock_seconds": total_wall_clock_seconds,
+        "native_counters": total_counters,
+        **{f"total_{key}": value for key, value in total_counters.items()},
+        "total_tool_call_count": total_tool_call_count,
+        "selection_score": selection_score,
+        "artifact_root": str(output_root),
+        "task_filter": list(config.task_filter),
+        "results": results,
+    }
+
+
+def _write_summary_artifacts(output_root: Path, summary: dict[str, Any], results: list[dict[str, Any]]) -> dict[str, Any]:
+    summary_path = Path(os.getenv(SUMMARY_ENV, "")).expanduser() if os.getenv(SUMMARY_ENV) else output_root / "summary.json"
+    _write_json(summary_path, summary)
+    samples_path = Path(os.getenv(SAMPLES_ENV, "")).expanduser() if os.getenv(SAMPLES_ENV) else output_root / "samples.jsonl"
+    samples_path.parent.mkdir(parents=True, exist_ok=True)
+    with samples_path.open("w", encoding="utf-8") as handle:
+        for item in results:
+            handle.write(json.dumps(item, ensure_ascii=False) + "\n")
+    return {**summary, "summary_path": str(summary_path), "samples_path": str(samples_path)}
+
+
+def evaluate_config(
+    config_path: Path,
+    cli_overrides: dict[str, str] | None = None,
+    *,
+    resume: bool = False,
+) -> dict[str, Any]:
     config = load_eval_config(config_path, cli_overrides)
     output_root = _resolve_output_root(config, config_path)
     output_root.mkdir(parents=True, exist_ok=True)
+    _write_run_config(output_root, config, config_path=config_path)
     bundle = _discover_override_bundle()
     cache_root = config.cache_root or (get_gauss_home() / "benchmarks" / "formalqualbench" / "cache")
     cache_root.mkdir(parents=True, exist_ok=True)
@@ -821,6 +1019,9 @@ def evaluate_config(config_path: Path, cli_overrides: dict[str, str] | None = No
         cache_root / "formalqualbench",
     )
     expected_lean_toolchain = _read_lean_toolchain(formalqualbench_root)
+    run_config_payload = _eval_config_payload(config, config_path=config_path)
+    run_config_payload["lean_toolchain"] = expected_lean_toolchain
+    _write_json(output_root / "run_config.resolved.json", run_config_payload)
     _prime_formalqualbench_cache(formalqualbench_root)
     toolchain = _ensure_comparator_toolchain(
         config,
@@ -828,54 +1029,98 @@ def evaluate_config(config_path: Path, cli_overrides: dict[str, str] | None = No
         expected_lean_toolchain=expected_lean_toolchain,
     )
 
-    results = [
-        _run_one_task(
-            config,
-            cached_repo=formalqualbench_root,
-            toolchain=toolchain,
-            output_root=output_root,
-            task_name=task_name,
-            bundle=bundle,
-        )
-        for task_name in config.task_filter
-    ]
-    solve_count = sum(1 for item in results if item["comparator_valid"])
-    total_wall_clock_seconds = round(sum(float(item["wall_clock_seconds"]) for item in results), 3)
-    total_bash_call_count = sum(int(item["bash_call_count"]) for item in results)
-    total_mcp_call_count = sum(int(item["mcp_call_count"]) for item in results)
-    total_tool_call_count = total_bash_call_count + total_mcp_call_count
-    # Keep solve count lexicographically dominant, then prefer lower runtime, then fewer tool calls.
-    selection_score = round((solve_count * 1_000_000_000.0) - (total_wall_clock_seconds * 1_000.0) - total_tool_call_count, 3)
-    summary = {
-        "system": config.system_name,
-        "backend": config.backend,
-        "model": config.model_name,
-        "reasoning_effort": config.reasoning_effort,
-        "lean_toolchain": expected_lean_toolchain,
-        "formalqualbench_ref": config.formalqualbench_ref,
-        "comparator_ref": config.comparator_ref,
-        "lean4export_ref": config.lean4export_ref,
-        "task_count": len(results),
-        "solve_count": solve_count,
-        "mean_score": (solve_count / len(results)) if results else 0.0,
-        "total_wall_clock_seconds": total_wall_clock_seconds,
-        "total_bash_call_count": total_bash_call_count,
-        "total_mcp_call_count": total_mcp_call_count,
-        "total_tool_call_count": total_tool_call_count,
-        "selection_score": selection_score,
-        "artifact_root": str(output_root),
-        "task_filter": list(config.task_filter),
-        "results": results,
-    }
+    results: list[dict[str, Any]] = []
+    for task_name in config.task_filter:
+        if resume:
+            existing = _load_existing_task_result(output_root, task_name)
+            if existing is not None:
+                results.append(existing)
+                continue
+        try:
+            result = _run_one_task(
+                config,
+                cached_repo=formalqualbench_root,
+                toolchain=toolchain,
+                output_root=output_root,
+                task_name=task_name,
+                bundle=bundle,
+            )
+        except Exception as exc:
+            result = _write_failed_task_result(
+                config,
+                output_root=output_root,
+                task_name=task_name,
+                exc=exc,
+            )
+        results.append(result)
 
-    summary_path = Path(os.getenv(SUMMARY_ENV, "")).expanduser() if os.getenv(SUMMARY_ENV) else output_root / "summary.json"
-    _write_json(summary_path, summary)
-    samples_path = Path(os.getenv(SAMPLES_ENV, "")).expanduser() if os.getenv(SAMPLES_ENV) else output_root / "samples.jsonl"
-    samples_path.parent.mkdir(parents=True, exist_ok=True)
-    with samples_path.open("w", encoding="utf-8") as handle:
-        for item in results:
-            handle.write(json.dumps(item, ensure_ascii=False) + "\n")
-    return summary
+    summary = _build_summary(
+        config=config,
+        results=results,
+        output_root=output_root,
+        lean_toolchain=expected_lean_toolchain,
+    )
+    return _write_summary_artifacts(output_root, summary, results)
+
+
+def _resolve_run_root(run_id: str | Path) -> Path:
+    raw = Path(str(run_id)).expanduser()
+    if raw.exists() or raw.is_absolute() or len(raw.parts) > 1:
+        return raw.resolve()
+    return (get_gauss_home() / RUNS_ROOT_SUBDIR / str(run_id)).resolve()
+
+
+def summarize_run(run_id: str | Path) -> dict[str, Any]:
+    output_root = _resolve_run_root(run_id)
+    run_config_path = output_root / "run_config.resolved.json"
+    if not run_config_path.is_file():
+        raise RuntimeError(f"run_config.resolved.json not found under {output_root}")
+    run_config = json.loads(run_config_path.read_text(encoding="utf-8"))
+    config = EvalConfig(
+        **{
+            item.name: run_config.get(item.name, item.default)
+            for item in fields(EvalConfig)
+            if item.name not in {"cache_root", "output_root"}
+        },
+        cache_root=Path(run_config["cache_root"]).expanduser().resolve() if run_config.get("cache_root") else None,
+        output_root=output_root,
+    )
+    results: list[dict[str, Any]] = []
+    task_filter = list(run_config.get("task_filter") or [])
+    if task_filter:
+        for task_name in task_filter:
+            existing = _load_existing_task_result(output_root, str(task_name))
+            if existing is not None:
+                results.append(existing)
+    else:
+        for result_path in sorted((output_root / "artifacts").glob("*/result.json")):
+            results.append(json.loads(result_path.read_text(encoding="utf-8")))
+    summary = _build_summary(
+        config=config,
+        results=results,
+        output_root=output_root,
+        lean_toolchain=str(run_config.get("lean_toolchain", "") or ""),
+    )
+    return _write_summary_artifacts(output_root, summary, results)
+
+
+def resume_run(run_id: str | Path) -> dict[str, Any]:
+    output_root = _resolve_run_root(run_id)
+    run_config_path = output_root / "run_config.resolved.json"
+    if not run_config_path.is_file():
+        raise RuntimeError(f"run_config.resolved.json not found under {output_root}")
+    run_config = json.loads(run_config_path.read_text(encoding="utf-8"))
+    source_config = Path(str(run_config.get("source_config_path") or "")).expanduser()
+    if not source_config.is_file():
+        raise RuntimeError(
+            f"Original FormalQualBench config not found for resume: {source_config}. "
+            "Use summarize for partial results, or rerun with --config."
+        )
+    return evaluate_config(
+        source_config.resolve(),
+        {"env.output_root": str(output_root)},
+        resume=True,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -883,12 +1128,31 @@ def main(argv: list[str] | None = None) -> int:
     subparsers = parser.add_subparsers(dest="command")
     evaluate_parser = subparsers.add_parser("evaluate")
     evaluate_parser.add_argument("--config", required=True)
+    run_parser = subparsers.add_parser("run")
+    run_parser.add_argument("--config", required=True)
+    run_parser.add_argument("--output-root")
+    resume_parser = subparsers.add_parser("resume")
+    resume_parser.add_argument("--run-id", required=True)
+    summarize_parser = subparsers.add_parser("summarize")
+    summarize_parser.add_argument("--run-id", required=True)
     args, extras = parser.parse_known_args(argv)
-    if args.command != "evaluate":
+    if args.command in {"evaluate", "run"}:
+        overrides = _parse_cli_overrides(extras)
+        if getattr(args, "output_root", None):
+            overrides["env.output_root"] = str(Path(args.output_root).expanduser().resolve())
+        evaluate_config(Path(args.config).expanduser().resolve(), overrides)
+        return 0
+    if args.command == "resume":
+        resume_run(args.run_id)
+        return 0
+    if args.command == "summarize":
+        summarize_run(args.run_id)
+        return 0
+    if args.command is None:
         parser.print_help()
         return 2
-    evaluate_config(Path(args.config).expanduser().resolve(), _parse_cli_overrides(extras))
-    return 0
+    parser.error(f"unknown command: {args.command}")
+    return 2
 
 
 if __name__ == "__main__":

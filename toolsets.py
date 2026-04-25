@@ -100,10 +100,32 @@ TOOLSETS = {
         "includes": []
     },
 
+    "lean-lsp": {
+        "description": "OpenGauss-native Lean LSP-style context tools",
+        "tools": [
+            "lean_lsp_diagnostics",
+            "lean_lsp_goals",
+            "lean_lsp_hover",
+            "lean_lsp_definition",
+            "lean_lsp_references",
+            "lean_lsp_symbols",
+            "lean_proof_context",
+        ],
+        "includes": []
+    },
+
+    "lean-comparator": {
+        "description": "OpenGauss-native Comparator proof-audit tools",
+        "tools": [
+            "lean_comparator_check",
+        ],
+        "includes": []
+    },
+
     "opengauss-lean": {
         "description": "Native OpenGauss Lean workflow tools without generic shell access",
         "tools": [],
-        "includes": ["file", "axle", "lean-local"]
+        "includes": ["file", "axle", "lean-local", "lean-lsp", "lean-comparator"]
     },
 
     "autoformalize": {

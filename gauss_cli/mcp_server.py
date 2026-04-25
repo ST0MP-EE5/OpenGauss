@@ -17,8 +17,16 @@ from gauss_cli.config import load_config
 from gauss_cli.lean_service import (
     AxleProofService,
     LeanProofServiceError,
+    local_lean_lsp_definition,
+    local_lean_lsp_diagnostics,
+    local_lean_lsp_goals,
+    local_lean_lsp_hover,
+    local_lean_lsp_references,
+    local_lean_lsp_symbols,
+    local_lean_proof_context,
     resolve_axle_environment,
 )
+from gauss_cli.lean_comparator import local_lean_comparator_check
 from gauss_cli.lean_workflow import (
     LeanWorkflowError,
     prepare_native_lean_workflow,
@@ -637,6 +645,151 @@ async def axle_rename(
     )
 
 
+def _native_lean_error_payload(operation: str, exc: Exception) -> dict[str, Any]:
+    error_type = exc.code if isinstance(exc, LeanProofServiceError) else type(exc).__name__
+    return {
+        "success": False,
+        "provider": "local",
+        "operation": operation,
+        "error": str(exc),
+        "error_type": error_type,
+        "mcp_adapter": True,
+    }
+
+
+def gauss_lean_lsp_diagnostics(
+    path: str,
+    *,
+    cwd: str | None = None,
+    timeout_seconds: int = 30 * 60,
+) -> dict[str, Any]:
+    """Adapter over native Lean diagnostics service."""
+    try:
+        payload = local_lean_lsp_diagnostics(path=path, cwd=cwd, timeout_seconds=timeout_seconds)
+    except Exception as exc:
+        return _native_lean_error_payload("lean_lsp_diagnostics", exc)
+    return {"success": True, "operation": "lean_lsp_diagnostics", "mcp_adapter": True, **payload}
+
+
+def gauss_lean_lsp_goals(
+    path: str,
+    line: int,
+    column: int,
+    *,
+    cwd: str | None = None,
+) -> dict[str, Any]:
+    """Adapter over native Lean goal-context service."""
+    try:
+        payload = local_lean_lsp_goals(path=path, line=line, column=column, cwd=cwd)
+    except Exception as exc:
+        return _native_lean_error_payload("lean_lsp_goals", exc)
+    return {"success": True, "operation": "lean_lsp_goals", "mcp_adapter": True, **payload}
+
+
+def gauss_lean_lsp_hover(
+    path: str,
+    line: int,
+    column: int,
+    *,
+    cwd: str | None = None,
+) -> dict[str, Any]:
+    """Adapter over native Lean hover service."""
+    try:
+        payload = local_lean_lsp_hover(path=path, line=line, column=column, cwd=cwd)
+    except Exception as exc:
+        return _native_lean_error_payload("lean_lsp_hover", exc)
+    return {"success": True, "operation": "lean_lsp_hover", "mcp_adapter": True, **payload}
+
+
+def gauss_lean_lsp_definition(
+    path: str,
+    line: int,
+    column: int,
+    *,
+    cwd: str | None = None,
+) -> dict[str, Any]:
+    """Adapter over native Lean definition lookup."""
+    try:
+        payload = local_lean_lsp_definition(path=path, line=line, column=column, cwd=cwd)
+    except Exception as exc:
+        return _native_lean_error_payload("lean_lsp_definition", exc)
+    return {"success": True, "operation": "lean_lsp_definition", "mcp_adapter": True, **payload}
+
+
+def gauss_lean_lsp_references(
+    path: str,
+    line: int,
+    column: int,
+    *,
+    cwd: str | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Adapter over native Lean reference search."""
+    try:
+        payload = local_lean_lsp_references(path=path, line=line, column=column, cwd=cwd, limit=limit)
+    except Exception as exc:
+        return _native_lean_error_payload("lean_lsp_references", exc)
+    return {"success": True, "operation": "lean_lsp_references", "mcp_adapter": True, **payload}
+
+
+def gauss_lean_lsp_symbols(
+    query: str,
+    *,
+    cwd: str | None = None,
+    path: str | None = None,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Adapter over native Lean symbol search."""
+    try:
+        payload = local_lean_lsp_symbols(query=query, cwd=cwd, path=path, limit=limit)
+    except Exception as exc:
+        return _native_lean_error_payload("lean_lsp_symbols", exc)
+    return {"success": True, "operation": "lean_lsp_symbols", "mcp_adapter": True, **payload}
+
+
+def gauss_lean_proof_context(
+    path: str,
+    *,
+    cwd: str | None = None,
+    line: int | None = None,
+    column: int | None = None,
+) -> dict[str, Any]:
+    """Adapter over native combined Lean proof context."""
+    try:
+        payload = local_lean_proof_context(path=path, cwd=cwd, line=line, column=column)
+    except Exception as exc:
+        return _native_lean_error_payload("lean_proof_context", exc)
+    return {"success": True, "operation": "lean_proof_context", "mcp_adapter": True, **payload}
+
+
+def gauss_lean_comparator_check(
+    challenge_path: str,
+    solution_path: str,
+    *,
+    cwd: str | None = None,
+    theorem_names: list[str] | None = None,
+    permitted_axioms: list[str] | None = None,
+    comparator_binary: str | None = None,
+    artifact_dir: str | None = None,
+    timeout_seconds: int = 30 * 60,
+) -> dict[str, Any]:
+    """Adapter over native Comparator proof audit."""
+    try:
+        payload = local_lean_comparator_check(
+            challenge_path=challenge_path,
+            solution_path=solution_path,
+            cwd=cwd,
+            theorem_names=theorem_names,
+            permitted_axioms=permitted_axioms,
+            comparator_binary=comparator_binary,
+            artifact_dir=artifact_dir,
+            timeout_seconds=timeout_seconds,
+        )
+    except Exception as exc:
+        return _native_lean_error_payload("lean_comparator_check", exc)
+    return {"mcp_adapter": True, **payload}
+
+
 def gauss_sessions_list(
     *,
     source: str | None = None,
@@ -1096,6 +1249,38 @@ def build_server() -> FastMCP:
         name="axle_rename",
         description="Rename Lean declarations with AXLE using project-aware environment resolution.",
     )(axle_rename)
+    server.tool(
+        name="gauss_lean_lsp_diagnostics",
+        description="Return native Lean diagnostics for a file; MCP is only an adapter.",
+    )(gauss_lean_lsp_diagnostics)
+    server.tool(
+        name="gauss_lean_lsp_goals",
+        description="Return native Lean goal/context information at a cursor; MCP is only an adapter.",
+    )(gauss_lean_lsp_goals)
+    server.tool(
+        name="gauss_lean_lsp_hover",
+        description="Return native Lean hover information at a cursor; MCP is only an adapter.",
+    )(gauss_lean_lsp_hover)
+    server.tool(
+        name="gauss_lean_lsp_definition",
+        description="Find likely Lean definition sites through the native declaration index.",
+    )(gauss_lean_lsp_definition)
+    server.tool(
+        name="gauss_lean_lsp_references",
+        description="Find Lean symbol references through the native reference index.",
+    )(gauss_lean_lsp_references)
+    server.tool(
+        name="gauss_lean_lsp_symbols",
+        description="Search Lean declarations through the native declaration index.",
+    )(gauss_lean_lsp_symbols)
+    server.tool(
+        name="gauss_lean_proof_context",
+        description="Return combined native Lean proof context for a file.",
+    )(gauss_lean_proof_context)
+    server.tool(
+        name="gauss_lean_comparator_check",
+        description="Run native Comparator proof audit; MCP is only an adapter.",
+    )(gauss_lean_comparator_check)
     server.tool(
         name="gauss_sessions_list",
         description="List stored OpenGauss sessions with previews and activity metadata.",

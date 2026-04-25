@@ -9,7 +9,7 @@ OpenGauss is responsible for:
 - detecting or initializing the active Lean project
 - running Lean workflow commands in-process through OpenGauss
 - using `openai-codex:gpt-5.5` as the default native Lean model runtime
-- exposing controlled local Lean operations and AXLE proof-service tools
+- exposing controlled local Lean operations, native Lean context tools, AXLE proof-service tools, and Comparator audit tools
 - running FormalQualBench through the same native runner
 - serving MCP adapters for external clients
 
@@ -44,6 +44,14 @@ Native workflow commands use file tools, AXLE tools, and controlled local Lean o
 - `lean_check_file`
 - `lean_lake_build`
 - `lean_sorry_report`
+- `lean_lsp_diagnostics`
+- `lean_lsp_goals`
+- `lean_lsp_hover`
+- `lean_lsp_definition`
+- `lean_lsp_references`
+- `lean_lsp_symbols`
+- `lean_proof_context`
+- `lean_comparator_check`
 
 Generic terminal execution is not the proof interface.
 
@@ -64,6 +72,12 @@ FormalQualBench runs directly through OpenGauss:
 `FormalQualBench env -> native OpenGauss Lean runner -> Lean workspace -> Comparator`
 
 Native runs report `mcp_call_count = 0`, preserve artifacts, and leave comparator validation as the final scoring authority.
+
+```bash
+gauss bench formalqual run --config environments/benchmarks/formalqualbench/opengauss_verified8.yaml
+gauss bench formalqual resume --run-id <run-id-or-artifact-dir>
+gauss bench formalqual summarize --run-id <run-id-or-artifact-dir>
+```
 
 ## Verification
 

@@ -24,6 +24,7 @@ gauss
 ```
 
 From the repo root, bare `gauss` selects this `Lean4` project and enables the `opengauss-lean` toolset with `openai-codex:gpt-5.5`.
+The toolset includes scoped file edits, AXLE, controlled local Lean checks/builds, native LSP-style context, and Comparator audit support.
 
 ## Layout
 

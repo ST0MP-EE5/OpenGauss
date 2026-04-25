@@ -14,6 +14,11 @@ from gauss_cli.lean_service import (
     AxleProofService,
     LeanProofServiceConfigurationError,
     LeanProofServiceUnavailableError,
+    local_lean_lsp_definition,
+    local_lean_lsp_diagnostics,
+    local_lean_lsp_symbols,
+    local_lean_proof_context,
+    local_lean_lsp_references,
     get_lean_service_provider,
     resolve_axle_environment,
 )
@@ -110,6 +115,99 @@ def test_resolve_axle_environment_raises_when_unconfigured(tmp_path):
             {"gauss": {"lean_service": {"environment": ""}}},
             cwd=tmp_path,
         )
+
+
+def test_native_lsp_symbols_and_definition_use_project_index(tmp_path):
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    (project_root / "lakefile.toml").write_text('name = "demo"\n', encoding="utf-8")
+    initialize_gauss_project(project_root, name="Demo")
+    lean_file = project_root / "Demo.lean"
+    lean_file.write_text(
+        "\n".join(
+            [
+                "namespace Demo",
+                "theorem helper : True := by trivial",
+                "theorem target : True := by",
+                "  exact helper",
+                "end Demo",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    symbols = local_lean_lsp_symbols(query="helper", cwd=project_root)
+    definition = local_lean_lsp_definition(path="Demo.lean", line=4, column=9, cwd=project_root)
+    references = local_lean_lsp_references(path="Demo.lean", line=4, column=9, cwd=project_root)
+
+    assert symbols["symbol_count"] == 1
+    assert symbols["symbols"][0]["full_name"] == "Demo.helper"
+    assert definition["symbol"] == "helper"
+    assert definition["definitions"][0]["full_name"] == "Demo.helper"
+    assert references["symbol"] == "helper"
+    assert references["reference_count"] == 2
+
+
+def test_native_lsp_diagnostics_parse_controlled_lean_check(monkeypatch, tmp_path):
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    (project_root / "lakefile.toml").write_text('name = "demo"\n', encoding="utf-8")
+    initialize_gauss_project(project_root, name="Demo")
+    lean_file = project_root / "Demo.lean"
+    lean_file.write_text("theorem broken : True := by\n  exact False.elim ?h\n", encoding="utf-8")
+
+    def fake_check_file(*, path, cwd=None, timeout_seconds=1800):
+        del cwd, timeout_seconds
+        return {
+            "success": False,
+            "returncode": 1,
+            "timed_out": False,
+            "stdout": "",
+            "stderr": f"{Path(path)}:2:9: error: unsolved goals\ncase h\n⊢ False\n",
+        }
+
+    monkeypatch.setattr("gauss_cli.lean_service.local_lean_check_file", fake_check_file)
+
+    diagnostics = local_lean_lsp_diagnostics(path="Demo.lean", cwd=project_root)
+
+    assert diagnostics["success"] is False
+    assert diagnostics["diagnostic_count"] == 1
+    assert diagnostics["diagnostics"][0]["line"] == 2
+    assert diagnostics["diagnostics"][0]["severity"] == "error"
+    assert "unsolved goals" in diagnostics["diagnostics"][0]["message"]
+
+
+def test_native_proof_context_combines_imports_sorries_and_cursor_context(monkeypatch, tmp_path):
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    (project_root / "lakefile.toml").write_text('name = "demo"\n', encoding="utf-8")
+    initialize_gauss_project(project_root, name="Demo")
+    lean_file = project_root / "Demo.lean"
+    lean_file.write_text(
+        "\n".join(
+            [
+                "import Mathlib",
+                "namespace Demo",
+                "theorem target : True := by",
+                "  sorry",
+                "end Demo",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "gauss_cli.lean_service.local_lean_check_file",
+        lambda **kwargs: {"success": True, "returncode": 0, "timed_out": False, "stdout": "", "stderr": ""},
+    )
+
+    context = local_lean_proof_context(path="Demo.lean", cwd=project_root, line=4, column=4)
+
+    assert context["imports"] == ["Mathlib"]
+    assert context["sorry_count"] == 1
+    assert context["symbols"][0]["full_name"] == "Demo.target"
+    assert context["goals"]["goal_state_available"] is False
+    assert context["hover"]["symbol"] == "sorry"
 
 
 def _install_fake_axle(

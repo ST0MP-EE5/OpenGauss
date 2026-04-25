@@ -56,6 +56,8 @@ def test_run_native_lean_workflow_constructs_codex_agent_with_native_toolset(mon
     assert kwargs["skip_memory"] is False
     assert captured["persist_user_message"] == "/autoformalize prove the main theorem"
     assert "do not delegate to external CLIs" in captured["system_message"]
+    assert "Native workflow profile: autonomous formalization campaign" in captured["system_message"]
+    assert "lean_comparator_check" in captured["system_message"]
     assert result.final_response == "done"
 
 

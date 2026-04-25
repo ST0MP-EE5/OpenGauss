@@ -139,6 +139,38 @@ def test_build_server_registers_axle_tools(monkeypatch):
     assert "axle_simplify_theorems" in registered
     assert "axle_normalize" in registered
     assert "axle_rename" in registered
+    assert "gauss_lean_lsp_diagnostics" in registered
+    assert "gauss_lean_lsp_goals" in registered
+    assert "gauss_lean_lsp_references" in registered
+    assert "gauss_lean_proof_context" in registered
+    assert "gauss_lean_comparator_check" in registered
+
+
+def test_mcp_lsp_and_comparator_tools_are_native_adapters(monkeypatch):
+    monkeypatch.setattr(
+        mcp_server,
+        "local_lean_lsp_diagnostics",
+        lambda **kwargs: {"provider": "local", "diagnostics": [], "received": kwargs},
+    )
+    monkeypatch.setattr(
+        mcp_server,
+        "local_lean_comparator_check",
+        lambda **kwargs: {"provider": "local", "comparator_valid": True, "mcp_call_count": 0, "received": kwargs},
+    )
+
+    diagnostics = mcp_server.gauss_lean_lsp_diagnostics("Demo.lean", cwd="/tmp/project")
+    comparator = mcp_server.gauss_lean_comparator_check(
+        "Challenge.lean",
+        "Solution.lean",
+        cwd="/tmp/project",
+    )
+
+    assert diagnostics["success"] is True
+    assert diagnostics["mcp_adapter"] is True
+    assert diagnostics["received"]["path"] == "Demo.lean"
+    assert comparator["mcp_adapter"] is True
+    assert comparator["comparator_valid"] is True
+    assert comparator["mcp_call_count"] == 0
 
 
 def test_gauss_autoformalize_prepare_returns_direct_native_payload(tmp_path):
