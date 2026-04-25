@@ -16,7 +16,7 @@ def test_prepare_native_lean_workflow_uses_checked_in_lean4_project():
     assert plan.project.root.name == "Lean4"
 
 
-def test_run_native_lean_workflow_constructs_codex_agent_with_native_toolset(monkeypatch):
+def test_run_native_lean_workflow_constructs_codex_agent_with_opengauss_toolset(monkeypatch):
     captured = {}
 
     class FakeAgent:
@@ -50,14 +50,16 @@ def test_run_native_lean_workflow_constructs_codex_agent_with_native_toolset(mon
     assert kwargs["provider"] == "openai-codex"
     assert kwargs["model"] == "gpt-5.5"
     assert kwargs["api_mode"] == "codex_responses"
-    assert kwargs["reasoning_config"] == {"enabled": True, "effort": "medium"}
+    assert kwargs["reasoning_config"] == {"enabled": True, "effort": "high"}
     assert kwargs["enabled_toolsets"] == ["opengauss-lean"]
     assert kwargs["skip_context_files"] is False
     assert kwargs["skip_memory"] is False
     assert captured["persist_user_message"] == "/autoformalize prove the main theorem"
     assert "do not delegate to external CLIs" in captured["system_message"]
+    assert "OpenGauss owns this workflow loop" in captured["system_message"]
     assert "Native workflow profile: autonomous formalization campaign" in captured["system_message"]
     assert "lean_comparator_check" in captured["system_message"]
+    assert "lean_project_inspect" in captured["system_message"]
     assert result.final_response == "done"
 
 

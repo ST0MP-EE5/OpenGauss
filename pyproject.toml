@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "gauss-agent"
 version = "0.2.2"
-description = "Gauss is a focused Lean autoformalization workspace with a native OpenGauss workflow runner."
+description = "Gauss is a focused Lean autoformalization workspace with a Codex frontend over the OpenGauss harness."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Math Inc." }]
@@ -14,7 +14,6 @@ dependencies = [
   # Core
   "axiom-axle>=1.2.0",
   "openai",
-  "anthropic>=0.39.0",
   "python-dotenv",
   "fire",
   "httpx",
@@ -24,8 +23,6 @@ dependencies = [
   "requests",
   "jinja2",
   "pydantic>=2.0",
-  # Interactive CLI (prompt_toolkit is used directly by cli.py)
-  "prompt_toolkit",
 ]
 
 [project.optional-dependencies]
@@ -60,7 +57,7 @@ gauss = "gauss_cli.main:main"
 gauss-agent = "run_agent:main"
 
 [tool.setuptools]
-py-modules = ["run_agent", "model_tools", "toolsets", "batch_runner", "trajectory_compressor", "toolset_distributions", "cli", "gauss_constants", "gauss_state", "gauss_time", "utils"]
+py-modules = ["run_agent", "model_tools", "toolsets", "batch_runner", "trajectory_compressor", "toolset_distributions", "gauss_constants", "gauss_state", "gauss_time", "utils"]
 
 [tool.setuptools.packages.find]
 include = ["agent", "tools", "tools.*", "gauss_cli", "environments", "environments.*"]

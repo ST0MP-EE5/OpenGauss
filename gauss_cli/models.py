@@ -15,9 +15,7 @@ from typing import Any, Optional
 
 # (model_id, display description shown in menus)
 OPENROUTER_MODELS: list[tuple[str, str]] = [
-    ("anthropic/claude-opus-4.6",       "recommended"),
-    ("anthropic/claude-sonnet-4.5",     ""),
-    ("openai/gpt-5.5",                  ""),
+    ("openai/gpt-5.5",                  "recommended"),
     ("openai/gpt-5.4-pro",              ""),
     ("openai/gpt-5.4",                  ""),
     ("openai/gpt-5.3-codex",            ""),
@@ -33,8 +31,6 @@ OPENROUTER_MODELS: list[tuple[str, str]] = [
 
 _PROVIDER_MODELS: dict[str, list[str]] = {
     "nous": [
-        "claude-opus-4-6",
-        "claude-sonnet-4-6",
         "gpt-5.5",
         "gpt-5.4",
         "gemini-3-flash",
@@ -73,15 +69,6 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "MiniMax-M2.5-highspeed",
         "MiniMax-M2.1",
     ],
-    "anthropic": [
-        "claude-opus-4-6",
-        "claude-sonnet-4-6",
-        "claude-opus-4-5-20251101",
-        "claude-sonnet-4-5-20250929",
-        "claude-opus-4-20250514",
-        "claude-sonnet-4-20250514",
-        "claude-haiku-4-5-20251001",
-    ],
     "deepseek": [
         "deepseek-chat",
         "deepseek-reasoner",
@@ -96,7 +83,6 @@ _PROVIDER_LABELS = {
     "kimi-coding": "Kimi / Moonshot",
     "minimax": "MiniMax",
     "minimax-cn": "MiniMax (China)",
-    "anthropic": "Anthropic",
     "deepseek": "DeepSeek",
     "custom": "Custom endpoint",
 }
@@ -110,8 +96,6 @@ _PROVIDER_ALIASES = {
     "moonshot": "kimi-coding",
     "minimax-china": "minimax-cn",
     "minimax_cn": "minimax-cn",
-    "claude": "anthropic",
-    "claude-code": "anthropic",
     "deep-seek": "deepseek",
 }
 
@@ -122,7 +106,7 @@ def model_ids() -> list[str]:
 
 
 def menu_labels() -> list[str]:
-    """Return display labels like 'anthropic/claude-opus-4.6 (recommended)'."""
+    """Return display labels like 'openai/gpt-5.5 (recommended)'."""
     labels = []
     for mid, desc in OPENROUTER_MODELS:
         labels.append(f"{mid} ({desc})" if desc else mid)
@@ -146,7 +130,7 @@ def list_available_providers() -> list[dict[str, str]]:
     # Canonical providers in display order
     _PROVIDER_ORDER = [
         "openrouter", "nous", "openai-codex",
-        "zai", "kimi-coding", "minimax", "minimax-cn", "anthropic", "deepseek",
+        "zai", "kimi-coding", "minimax", "minimax-cn", "deepseek",
     ]
     # Build reverse alias map
     aliases_for: dict[str, list[str]] = {}
@@ -179,14 +163,13 @@ def parse_model_input(raw: str, current_provider: str) -> tuple[str, str]:
 
     Supports ``provider:model`` syntax to switch providers at runtime::
 
-        openrouter:anthropic/claude-sonnet-4.5  →  ("openrouter", "anthropic/claude-sonnet-4.5")
+        openrouter:openai/gpt-5.5              →  ("openrouter", "openai/gpt-5.5")
         nous:gauss-3                           →  ("nous", "gauss-3")
-        anthropic/claude-sonnet-4.5             →  (current_provider, "anthropic/claude-sonnet-4.5")
         gpt-5.4                                 →  (current_provider, "gpt-5.4")
 
     The colon is only treated as a provider delimiter if the left side is a
     recognized provider name or alias.  This avoids misinterpreting model names
-    that happen to contain colons (e.g. ``anthropic/claude-3.5-sonnet:beta``).
+    that happen to contain colons.
 
     Returns ``(provider, model)`` where *provider* is either the explicit
     provider from the input or *current_provider* if none was specified.
@@ -304,9 +287,8 @@ def _find_openrouter_slug(model_name: str) -> Optional[str]:
     """Find the full OpenRouter model slug for a bare or partial model name.
 
     Handles:
-    - Exact match: ``anthropic/claude-opus-4.6`` → as-is
+    - Exact match: ``openai/gpt-5.5`` → as-is
     - Bare name: ``deepseek-chat`` → ``deepseek/deepseek-chat``
-    - Bare name: ``claude-opus-4.6`` → ``anthropic/claude-opus-4.6``
     """
     name_lower = model_name.strip().lower()
     if not name_lower:
@@ -372,55 +354,7 @@ def provider_model_ids(provider: Optional[str]) -> list[str]:
                     return live
         except Exception:
             pass
-    if normalized == "anthropic":
-        live = _fetch_anthropic_models()
-        if live:
-            return live
     return list(_PROVIDER_MODELS.get(normalized, []))
-
-
-def _fetch_anthropic_models(timeout: float = 5.0) -> Optional[list[str]]:
-    """Fetch available models from the Anthropic /v1/models endpoint.
-
-    Uses resolve_anthropic_token() to find credentials (env vars or
-    Claude Code auto-discovery).  Returns sorted model IDs or None.
-    """
-    try:
-        from agent.anthropic_adapter import resolve_anthropic_token, _is_oauth_token
-    except ImportError:
-        return None
-
-    token = resolve_anthropic_token()
-    if not token:
-        return None
-
-    headers: dict[str, str] = {"anthropic-version": "2023-06-01"}
-    if _is_oauth_token(token):
-        headers["Authorization"] = f"Bearer {token}"
-        from agent.anthropic_adapter import _COMMON_BETAS, _OAUTH_ONLY_BETAS
-        headers["anthropic-beta"] = ",".join(_COMMON_BETAS + _OAUTH_ONLY_BETAS)
-    else:
-        headers["x-api-key"] = token
-
-    req = urllib.request.Request(
-        "https://api.anthropic.com/v1/models",
-        headers=headers,
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode())
-            models = [m["id"] for m in data.get("data", []) if m.get("id")]
-            # Sort: latest/largest first (opus > sonnet > haiku, higher version first)
-            return sorted(models, key=lambda m: (
-                "opus" not in m,      # opus first
-                "sonnet" not in m,    # then sonnet
-                "haiku" not in m,     # then haiku
-                m,                    # alphabetical within tier
-            ))
-    except Exception as e:
-        import logging
-        logging.getLogger(__name__).debug("Failed to fetch Anthropic models: %s", e)
-        return None
 
 
 def probe_api_models(

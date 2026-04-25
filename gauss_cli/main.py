@@ -3,8 +3,7 @@
 Gauss CLI - Main entry point.
 
 Usage:
-    gauss                      # Native OpenGauss Lean workflow in checked-in Lean4 workspace
-    gauss chat                 # Interactive chat
+    gauss                      # Launch Codex with the OpenGauss Lean harness
     gauss mcp-server           # OpenGauss MCP bridge for external clients
     gauss setup                # Interactive setup wizard
     gauss logout               # Clear stored authentication
@@ -26,11 +25,6 @@ from typing import Optional
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(PROJECT_ROOT))
-
-LEAN4_WORKSPACE_ROOT = PROJECT_ROOT / "Lean4"
-NATIVE_LEAN_DEFAULT_MODEL = "gpt-5.5"
-NATIVE_LEAN_DEFAULT_PROVIDER = "openai-codex"
-NATIVE_LEAN_DEFAULT_TOOLSETS = "opengauss-lean"
 
 # Load .env from ~/.gauss/.env first, then project root as dev fallback.
 # User-managed env files should override stale shell exports on restart.
@@ -129,22 +123,18 @@ def _launched_from_repo_root() -> bool:
 
 
 def _lean4_workspace_available() -> bool:
-    return (LEAN4_WORKSPACE_ROOT / ".gauss" / "project.yaml").exists()
+    return (PROJECT_ROOT / "Lean4" / ".gauss" / "project.yaml").exists()
 
 
 def _apply_native_lean_defaults(args) -> bool:
-    """Make bare `gauss` from the repo root enter the OpenGauss Lean workspace."""
-    if not (_launched_from_repo_root() and _lean4_workspace_available()):
-        return False
+    """Deprecated compatibility hook.
 
-    os.environ.setdefault("TERMINAL_CWD", str(LEAN4_WORKSPACE_ROOT))
-    if not getattr(args, "model", None):
-        args.model = NATIVE_LEAN_DEFAULT_MODEL
-    if not getattr(args, "provider", None):
-        args.provider = NATIVE_LEAN_DEFAULT_PROVIDER
-    if not getattr(args, "toolsets", None):
-        args.toolsets = NATIVE_LEAN_DEFAULT_TOOLSETS
-    return True
+    Upstream OpenGauss starts `gauss` as the top-level project frontend even
+    from the repository root. Lean work is selected with `/project ...` and
+    then spawned through managed workflow commands.
+    """
+    del args
+    return False
 
 
 def _session_browse_picker(sessions: list) -> Optional[str]:
@@ -422,98 +412,28 @@ def _resolve_session_by_name_or_id(name_or_id: str) -> Optional[str]:
 
 
 def cmd_chat(args):
-    """Run interactive chat CLI."""
-    # Resolve --continue into --resume with the latest CLI session or by name
-    continue_val = getattr(args, "continue_last", None)
-    if continue_val and not getattr(args, "resume", None):
-        if isinstance(continue_val, str):
-            # -c "session name" — resolve by title or ID
-            resolved = _resolve_session_by_name_or_id(continue_val)
-            if resolved:
-                args.resume = resolved
-            else:
-                print(f"No session found matching '{continue_val}'.")
-                print(f"Use '{get_cli_command_name()} sessions list' to see available sessions.")
-                sys.exit(1)
-        else:
-            # -c with no argument — continue the most recent session
-            last_id = _resolve_last_cli_session()
-            if last_id:
-                args.resume = last_id
-            else:
-                print("No previous CLI session found to continue.")
-                sys.exit(1)
+    """Compatibility message for the removed prompt_toolkit chat frontend."""
+    del args
+    print("`gauss chat` has been removed. Run `gauss` to open Codex with the OpenGauss harness.")
+    sys.exit(2)
 
-    # Resolve --resume by title if it's not a direct session ID
-    resume_val = getattr(args, "resume", None)
-    if resume_val:
-        resolved = _resolve_session_by_name_or_id(resume_val)
-        if resolved:
-            args.resume = resolved
-        # If resolution fails, keep the original value — _init_agent will
-        # report "Session not found" with the original input
 
-    # First-run guard: native Lean workflows and direct chat both need an
-    # in-process model provider.
-    if not _has_any_provider_configured():
-        if getattr(args, "query", None):
-            print()
-            print("Gauss query mode needs a configured provider.")
-            print()
-            print("  Run:  gauss setup")
-            print()
-            sys.exit(1)
+def cmd_codex_frontend(args):
+    """Launch stock Codex CLI with the OpenGauss Lean harness profile."""
+    from gauss_cli.codex_frontend import CodexFrontendError, launch_codex_frontend
 
-        from gauss_cli.setup import is_interactive_stdin, print_noninteractive_setup_guidance
-        if not is_interactive_stdin():
-            print_noninteractive_setup_guidance("No in-process model provider is configured yet.")
-            sys.exit(1)
-
-        print()
-        print("No in-process model provider is configured yet.")
-        print(
-            "You can still inspect or initialize projects, but `/prove`, `/autoprove`, "
-            "`/formalize`, and `/autoformalize` need OpenAI Codex auth."
+    try:
+        raise SystemExit(
+            launch_codex_frontend(
+                cwd=Path.cwd(),
+                project_path=getattr(args, "project", None),
+                model=getattr(args, "model", None),
+                reasoning_effort=getattr(args, "reasoning_effort", None),
+                query=getattr(args, "query", None),
+            )
         )
-        print("Run `gauss model` or `gauss setup` to configure the provider.")
-        print()
-
-    # Start update check in background (runs while other init happens)
-    try:
-        from gauss_cli.banner import prefetch_update_check
-        prefetch_update_check()
-    except Exception:
-        pass
-
-    # --yolo: bypass all dangerous command approvals
-    if getattr(args, "yolo", False):
-        os.environ["GAUSS_YOLO_MODE"] = "1"
-
-    # Import and run the CLI
-    from cli import main as cli_main
-
-    # Build kwargs from args
-    kwargs = {
-        "model": args.model,
-        "provider": getattr(args, "provider", None),
-        "toolsets": args.toolsets,
-        "skills": getattr(args, "skills", None),
-        "startup_input": getattr(args, "startup_input", None),
-        "verbose": args.verbose,
-        "quiet": getattr(args, "quiet", False),
-        "query": args.query,
-        "resume": getattr(args, "resume", None),
-        "worktree": getattr(args, "worktree", False),
-        "checkpoints": getattr(args, "checkpoints", False),
-        "pass_session_id": getattr(args, "pass_session_id", False),
-    }
-    # Filter out None values
-    kwargs = {k: v for k, v in kwargs.items() if v is not None}
-    
-    try:
-        cli_main(**kwargs)
-    except ValueError as e:
-        print(f"Error: {e}")
+    except CodexFrontendError as exc:
+        print(f"Error: {exc}")
         sys.exit(1)
 
 
@@ -567,7 +487,6 @@ def cmd_model(args):
         "openrouter": "OpenRouter",
         "nous": "Nous Portal",
         "openai-codex": "OpenAI Codex",
-        "anthropic": "Anthropic",
         "zai": "Z.AI / GLM",
         "kimi-coding": "Kimi / Moonshot",
         "minimax": "MiniMax",
@@ -586,7 +505,6 @@ def cmd_model(args):
         ("openrouter", "OpenRouter (100+ models, pay-per-use)"),
         ("nous", "Nous Portal (Nous Research subscription)"),
         ("openai-codex", "OpenAI Codex"),
-        ("anthropic", "Anthropic (Claude models — API key or Claude Code)"),
         ("zai", "Z.AI / GLM (Zhipu AI direct API)"),
         ("kimi-coding", "Kimi / Moonshot (Moonshot AI direct API)"),
         ("minimax", "MiniMax (global direct API)"),
@@ -655,8 +573,6 @@ def cmd_model(args):
         _model_flow_named_custom(config, _custom_provider_map[selected_provider])
     elif selected_provider == "remove-custom":
         _remove_custom_provider(config)
-    elif selected_provider == "anthropic":
-        _model_flow_anthropic(config, current_model)
     elif selected_provider == "kimi-coding":
         _model_flow_kimi(config, current_model)
     elif selected_provider in ("zai", "minimax", "minimax-cn"):
@@ -1425,223 +1341,6 @@ def _model_flow_api_key_provider(config, provider_id, current_model=""):
         print("No change.")
 
 
-def _run_anthropic_oauth_flow(save_env_value):
-    """Run the Claude OAuth setup-token flow. Returns True if credentials were saved."""
-    from agent.anthropic_adapter import (
-        run_oauth_setup_token,
-        read_claude_code_credentials,
-        is_claude_code_token_valid,
-    )
-    from gauss_cli.config import (
-        save_anthropic_oauth_token,
-        use_anthropic_claude_code_credentials,
-    )
-
-    def _activate_claude_code_credentials_if_available() -> bool:
-        try:
-            creds = read_claude_code_credentials()
-        except Exception:
-            creds = None
-        if creds and (
-            is_claude_code_token_valid(creds)
-            or bool(creds.get("refreshToken"))
-        ):
-            use_anthropic_claude_code_credentials(save_fn=save_env_value)
-            print("  ✓ Claude Code credentials linked.")
-            print("    Gauss will use Claude's credential store directly instead of copying a setup-token into the active home directory.")
-            return True
-        return False
-
-    try:
-        print()
-        print("  Running 'claude setup-token' — follow the prompts below.")
-        print("  A browser window will open for you to authorize access.")
-        print()
-        token = run_oauth_setup_token()
-        if token:
-            if _activate_claude_code_credentials_if_available():
-                return True
-            save_anthropic_oauth_token(token, save_fn=save_env_value)
-            print("  ✓ OAuth credentials saved.")
-            return True
-
-        # Subprocess completed but no token auto-detected — ask user to paste
-        print()
-        print("  If the setup-token was displayed above, paste it here:")
-        print()
-        try:
-            manual_token = input("  Paste setup-token (or Enter to cancel): ").strip()
-        except (KeyboardInterrupt, EOFError):
-            print()
-            return False
-        if manual_token:
-            save_anthropic_oauth_token(manual_token, save_fn=save_env_value)
-            print("  ✓ Setup-token saved.")
-            return True
-
-        print("  ⚠ Could not detect saved credentials.")
-        return False
-
-    except FileNotFoundError:
-        # Claude CLI not installed — guide user through manual setup
-        print()
-        print("  The 'claude' CLI is required for OAuth login.")
-        print()
-        print("  To install and authenticate:")
-        print()
-        print("    1. Install Claude Code:  npm install -g @anthropic-ai/claude-code")
-        print("    2. Run:                  claude setup-token")
-        print("    3. Follow the browser prompts to authorize")
-        print(f"    4. Re-run:               {get_cli_command_name()} model")
-        print()
-        print("  Or paste an existing setup-token now (sk-ant-oat-...):")
-        print()
-        try:
-            token = input("  Setup-token (or Enter to cancel): ").strip()
-        except (KeyboardInterrupt, EOFError):
-            print()
-            return False
-        if token:
-            save_anthropic_oauth_token(token, save_fn=save_env_value)
-            print("  ✓ Setup-token saved.")
-            return True
-        print("  Cancelled — install Claude Code and try again.")
-        return False
-
-
-def _model_flow_anthropic(config, current_model=""):
-    """Flow for Anthropic provider — OAuth subscription, API key, or Claude Code creds."""
-    import os
-    from gauss_cli.auth import (
-        PROVIDER_REGISTRY, _prompt_model_selection, _save_model_choice,
-        _update_config_for_provider, deactivate_provider,
-    )
-    from gauss_cli.config import (
-        get_env_value, save_env_value, load_config, save_config,
-        save_anthropic_api_key,
-    )
-    from gauss_cli.models import _PROVIDER_MODELS
-
-    pconfig = PROVIDER_REGISTRY["anthropic"]
-
-    # Check ALL credential sources
-    existing_key = (
-        get_env_value("ANTHROPIC_TOKEN")
-        or os.getenv("ANTHROPIC_TOKEN", "")
-        or get_env_value("ANTHROPIC_API_KEY")
-        or os.getenv("ANTHROPIC_API_KEY", "")
-        or os.getenv("CLAUDE_CODE_OAUTH_TOKEN", "")
-    )
-    cc_available = False
-    try:
-        from agent.anthropic_adapter import read_claude_code_credentials, is_claude_code_token_valid
-        cc_creds = read_claude_code_credentials()
-        if cc_creds and is_claude_code_token_valid(cc_creds):
-            cc_available = True
-    except Exception:
-        pass
-
-    has_creds = bool(existing_key) or cc_available
-    needs_auth = not has_creds
-
-    if has_creds:
-        # Show what we found
-        if existing_key:
-            print(f"  Anthropic credentials: {existing_key[:12]}... ✓")
-        elif cc_available:
-            print("  Claude Code credentials: ✓ (auto-detected)")
-        print()
-        print("    1. Use existing credentials")
-        print("    2. Reauthenticate (new OAuth login)")
-        print("    3. Cancel")
-        print()
-        try:
-            choice = input("  Choice [1/2/3]: ").strip()
-        except (KeyboardInterrupt, EOFError):
-            choice = "1"
-
-        if choice == "2":
-            needs_auth = True
-        elif choice == "3":
-            return
-        # choice == "1" or default: use existing, proceed to model selection
-
-    if needs_auth:
-        # Show auth method choice
-        print()
-        print("  Choose authentication method:")
-        print()
-        print("    1. Claude Pro/Max subscription (OAuth login)")
-        print("    2. Anthropic API key (pay-per-token)")
-        print("    3. Cancel")
-        print()
-        try:
-            choice = input("  Choice [1/2/3]: ").strip()
-        except (KeyboardInterrupt, EOFError):
-            print()
-            return
-
-        if choice == "1":
-            if not _run_anthropic_oauth_flow(save_env_value):
-                return
-
-        elif choice == "2":
-            print()
-            print("  Get an API key at: https://console.anthropic.com/settings/keys")
-            print()
-            try:
-                api_key = input("  API key (sk-ant-...): ").strip()
-            except (KeyboardInterrupt, EOFError):
-                print()
-                return
-            if not api_key:
-                print("  Cancelled.")
-                return
-            save_anthropic_api_key(api_key, save_fn=save_env_value)
-            print("  ✓ API key saved.")
-
-        else:
-            print("  No change.")
-            return
-    print()
-
-    # Model selection
-    model_list = _PROVIDER_MODELS.get("anthropic", [])
-    if model_list:
-        selected = _prompt_model_selection(model_list, current_model=current_model)
-    else:
-        try:
-            selected = input("Model name (e.g., claude-sonnet-4-20250514): ").strip()
-        except (KeyboardInterrupt, EOFError):
-            selected = None
-
-    if selected:
-        # Clear custom endpoint if set
-        if get_env_value("OPENAI_BASE_URL"):
-            save_env_value("OPENAI_BASE_URL", "")
-            save_env_value("OPENAI_API_KEY", "")
-
-        _save_model_choice(selected)
-
-        # Update config with provider — clear base_url since
-        # resolve_runtime_provider() always hardcodes Anthropic's URL.
-        # Leaving a stale base_url in config can contaminate other
-        # providers if the user switches without running 'gauss model'.
-        cfg = load_config()
-        model = cfg.get("model")
-        if not isinstance(model, dict):
-            model = {"default": model} if model else {}
-            cfg["model"] = model
-        model["provider"] = "anthropic"
-        model.pop("base_url", None)
-        save_config(cfg)
-        deactivate_provider()
-
-        print(f"Default model set to: {selected} (via Anthropic)")
-    else:
-        print("No change.")
-
-
 def cmd_login(args):
     """Authenticate Gauss CLI with a provider."""
     from gauss_cli.auth import login_command
@@ -1896,25 +1595,12 @@ def _refresh_workflow_runtime(repo_root: Path) -> None:
         subprocess.run(["npm", "ci", "--silent"], cwd=repo_root, check=False)
 
     try:
-        from toolsets import resolve_toolset
+        from gauss_cli.autoformalize import supported_autoformalize_backends
 
-        print("→ Checking native Lean workflow tools...")
-        tools = set(resolve_toolset("opengauss-lean"))
-        required_tools = {
-            "axle_check",
-            "lean_project_status",
-            "lean_lake_build",
-            "lean_check_file",
-            "lean_lsp_diagnostics",
-            "lean_proof_context",
-            "lean_comparator_check",
-        }
-        missing_tools = sorted(required_tools - tools)
-        if missing_tools:
-            raise RuntimeError(f"missing tools: {', '.join(missing_tools)}")
-        print("✓ Native Lean runtime ready: opengauss-lean")
+        backends = ", ".join(supported_autoformalize_backends())
+        print(f"✓ Managed Lean workflow backends ready: {backends}")
     except Exception as exc:
-        print(f"⚠ Native Lean runtime check failed: {exc}")
+        print(f"⚠ Managed Lean workflow check failed: {exc}")
 
 
 def _stash_local_changes_if_needed(git_cmd: list[str], cwd: Path) -> Optional[str]:
@@ -2232,9 +1918,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    gauss                           Start the native Lean CLI in Lean4 from this repo
-    gauss --query "..."             Run a single native Lean request
-    gauss --resume <session_id>     Resume a specific session by ID
+    gauss                           Open Codex with the OpenGauss Lean harness
+    gauss --query "..."             Run a single Codex request with OpenGauss tools
     gauss mcp-server                Run the OpenGauss MCP adapter over stdio
     gauss bench formalqual run --config config.yaml
     gauss setup                     Run setup wizard
@@ -2255,67 +1940,33 @@ For more help on a command:
         help="Show version and exit"
     )
     parser.add_argument(
-        "--resume", "-r",
-        metavar="SESSION",
-        default=None,
-        help="Resume a previous session by ID or title"
-    )
-    parser.add_argument(
-        "--continue", "-c",
-        dest="continue_last",
-        nargs="?",
-        const=True,
-        default=None,
-        metavar="SESSION_NAME",
-        help="Resume a session by name, or the most recent if no name given"
-    )
-    parser.add_argument(
-        "--worktree", "-w",
-        action="store_true",
-        default=False,
-        help="Run in an isolated git worktree (for parallel agents)"
-    )
-    parser.add_argument(
-        "--skills", "-s",
-        action="append",
-        default=None,
-        help=argparse.SUPPRESS,
-    )
-    parser.add_argument(
-        "--yolo",
-        action="store_true",
-        default=False,
-        help="Bypass all dangerous command approval prompts (use at your own risk)"
-    )
-    parser.add_argument(
-        "--pass-session-id",
-        action="store_true",
-        default=False,
-        help="Include the session ID in the agent's system prompt"
-    )
-    parser.add_argument(
-        "--startup-input",
-        action="append",
-        default=None,
-        help=argparse.SUPPRESS,
-    )
-    parser.add_argument(
         "-q", "--query",
-        help="Single query (non-interactive mode)"
+        help="Single query passed to `codex exec` with the OpenGauss profile"
+    )
+    parser.add_argument(
+        "--project",
+        help="Open a specific OpenGauss project path, e.g. `FoM` or `Lean4`"
     )
     parser.add_argument(
         "-m", "--model",
-        help="Model to use (default from repo root: gpt-5.5)"
+        help="Model to use for the main chat session"
     )
     parser.add_argument(
         "-t", "--toolsets",
+        default=None,
         help="Comma-separated toolsets to enable"
     )
     parser.add_argument(
         "--provider",
-        choices=["auto", "openrouter", "nous", "openai-codex", "anthropic", "zai", "kimi-coding", "minimax", "minimax-cn"],
+        choices=["openai-codex"],
         default=None,
-        help="Inference provider (default from repo root: openai-codex)"
+        help="Inference provider for the Codex frontend"
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        default=None,
+        choices=["low", "medium", "high", "xhigh"],
+        help="Codex reasoning effort for the generated profile"
     )
     parser.add_argument(
         "-v", "--verbose",
@@ -2329,102 +1980,8 @@ For more help on a command:
         default=False,
         help="Quiet mode for programmatic use"
     )
-    parser.add_argument(
-        "--checkpoints",
-        action="store_true",
-        default=False,
-        help="Enable filesystem checkpoints before destructive file operations"
-    )
     
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
-    
-    # =========================================================================
-    # chat command
-    # =========================================================================
-    chat_parser = subparsers.add_parser(
-        "chat",
-        help="Interactive chat with the agent",
-        description="Start an interactive Gauss chat session"
-    )
-    chat_parser.add_argument(
-        "-q", "--query",
-        help="Single query (non-interactive mode)"
-    )
-    chat_parser.add_argument(
-        "-m", "--model",
-        help="Model to use (e.g., anthropic/claude-sonnet-4)"
-    )
-    chat_parser.add_argument(
-        "-t", "--toolsets",
-        help="Comma-separated toolsets to enable"
-    )
-    chat_parser.add_argument(
-        "-s", "--skills",
-        action="append",
-        default=None,
-        help=argparse.SUPPRESS,
-    )
-    chat_parser.add_argument(
-        "--provider",
-        choices=["auto", "openrouter", "nous", "openai-codex", "anthropic", "zai", "kimi-coding", "minimax", "minimax-cn"],
-        default=None,
-        help="Inference provider (default: auto)"
-    )
-    chat_parser.add_argument(
-        "-v", "--verbose",
-        action="store_true",
-        help="Verbose output"
-    )
-    chat_parser.add_argument(
-        "-Q", "--quiet",
-        action="store_true",
-        help="Quiet mode for programmatic use: suppress banner, spinner, and tool previews. Only output the final response and session info."
-    )
-    chat_parser.add_argument(
-        "--resume", "-r",
-        metavar="SESSION_ID",
-        help="Resume a previous session by ID (shown on exit)"
-    )
-    chat_parser.add_argument(
-        "--continue", "-c",
-        dest="continue_last",
-        nargs="?",
-        const=True,
-        default=None,
-        metavar="SESSION_NAME",
-        help="Resume a session by name, or the most recent if no name given"
-    )
-    chat_parser.add_argument(
-        "--worktree", "-w",
-        action="store_true",
-        default=False,
-        help="Run in an isolated git worktree (for parallel agents on the same repo)"
-    )
-    chat_parser.add_argument(
-        "--checkpoints",
-        action="store_true",
-        default=False,
-        help="Enable filesystem checkpoints before destructive file operations (use /rollback to restore)"
-    )
-    chat_parser.add_argument(
-        "--yolo",
-        action="store_true",
-        default=False,
-        help="Bypass all dangerous command approval prompts (use at your own risk)"
-    )
-    chat_parser.add_argument(
-        "--pass-session-id",
-        action="store_true",
-        default=False,
-        help="Include the session ID in the agent's system prompt"
-    )
-    chat_parser.add_argument(
-        "--startup-input",
-        action="append",
-        default=None,
-        help=argparse.SUPPRESS,
-    )
-    chat_parser.set_defaults(func=cmd_chat)
 
     # =========================================================================
     # model command
@@ -2932,35 +2489,9 @@ For more help on a command:
         cmd_version(args)
         return
     
-    # Handle top-level --resume / --continue as shortcut to chat
-    if (args.resume or args.continue_last) and args.command is None:
-        args.command = "chat"
-        args.query = getattr(args, "query", None)
-        args.model = getattr(args, "model", None)
-        args.provider = getattr(args, "provider", None)
-        args.toolsets = getattr(args, "toolsets", None)
-        args.verbose = getattr(args, "verbose", False)
-        args.quiet = getattr(args, "quiet", False)
-        if not hasattr(args, "worktree"):
-            args.worktree = False
-        _apply_native_lean_defaults(args)
-        cmd_chat(args)
-        return
-    
-    # Default to chat if no command specified
+    # Default to the stock Codex frontend if no command is specified.
     if args.command is None:
-        args.query = getattr(args, "query", None)
-        args.model = getattr(args, "model", None)
-        args.provider = getattr(args, "provider", None)
-        args.toolsets = getattr(args, "toolsets", None)
-        args.verbose = getattr(args, "verbose", False)
-        args.quiet = getattr(args, "quiet", False)
-        args.resume = None
-        args.continue_last = None
-        if not hasattr(args, "worktree"):
-            args.worktree = False
-        _apply_native_lean_defaults(args)
-        cmd_chat(args)
+        cmd_codex_frontend(args)
         return
     
     # Execute the command

@@ -656,10 +656,10 @@ def _kill_process_group(proc, escalate: bool = False):
 
 
 def _load_config() -> dict:
-    """Load code_execution config from CLI_CONFIG if available."""
+    """Load code_execution config from persistent OpenGauss config."""
     try:
-        from cli import CLI_CONFIG
-        return CLI_CONFIG.get("code_execution", {})
+        from gauss_cli.config import load_config
+        return load_config().get("code_execution", {})
     except Exception:
         return {}
 

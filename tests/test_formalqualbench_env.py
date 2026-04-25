@@ -53,6 +53,41 @@ def test_verified8_config_uses_native_codex_lane():
     )
 
 
+def test_lane_overrides_collapse_to_canonical_native_lane(tmp_path: Path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "env": {
+                    "backend": "reference",
+                    "workflow_lane": "opengauss-parity-lean",
+                    "task_filter": ["ParisHarringtonPrinciple", "ColorfulCaratheodoryTheorem"],
+                    "max_attempts": 3,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = fq.load_eval_config(config_path)
+
+    assert config.workflow_lane == "native"
+    assert config.task_filter == ("ParisHarringtonPrinciple", "ColorfulCaratheodoryTheorem")
+    assert config.max_attempts == 3
+
+
+def test_workflow_message_counters_tracks_mcp_tool_calls():
+    counters = fq._workflow_message_counters(
+        [
+            {"role": "assistant", "tool_calls": [{"function": {"name": "mcp_lean_lsp_goal"}}]},
+            {"role": "tool", "name": "mcp_lean_lsp_goal", "content": "{}"},
+        ]
+    )
+
+    assert counters["model_call_count"] == 1
+    assert counters["mcp_call_count"] == 2
+
+
 def test_discover_override_bundle_prefers_explicit_root(monkeypatch, tmp_path: Path):
     bundle_root = tmp_path / "override-bundle"
     hints_dir = bundle_root / "theorem_hints"
@@ -133,7 +168,8 @@ def test_run_one_task_requires_comparator_success(monkeypatch, tmp_path: Path):
             return fq.ProcessResult(returncode=1, stdout="", stderr="comparator failed", duration_seconds=3.0)
         raise AssertionError(f"Unexpected command: {command}")
 
-    def fake_run_native_backend(config, *, command, workspace_root):
+    def fake_run_native_backend(config, *, command, workspace_root, toolchain=None, extra_guidance=None):
+        del toolchain, extra_guidance
         assert config.backend == "native"
         assert config.reasoning_effort == "high"
         assert command.startswith("/autoformalize FormalQualBench theorem: JordanCycleTheorem.")
@@ -163,6 +199,7 @@ def test_run_one_task_requires_comparator_success(monkeypatch, tmp_path: Path):
     assert result["comparator_returncode"] == 1
     assert result["comparator_valid"] is False
     assert result["score"] == 0.0
+    assert result["attempt_count"] == 1
     assert Path(result["challenge_path"]).is_file()
     assert Path(result["solution_path"]).is_file()
     assert Path(result["comparator_config_path"]).is_file()
@@ -196,6 +233,157 @@ def test_native_backend_disables_ambient_context_for_benchmarks(monkeypatch, tmp
     assert captured["kwargs"]["reasoning_effort"] == "high"
     assert captured["kwargs"]["skip_context_files"] is True
     assert captured["kwargs"]["skip_memory"] is True
+    assert captured["kwargs"]["toolset"] == "opengauss-lean"
+    assert captured["kwargs"]["extra_env"] is None
+
+
+def test_backend_passes_comparator_toolchain_to_agent(monkeypatch, tmp_path: Path):
+    captured = {}
+
+    def fake_run_native_lean_workflow(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+
+        class Result:
+            success = True
+            final_response = "ok"
+            error = ""
+
+        return Result()
+
+    monkeypatch.setattr(fq, "run_native_lean_workflow", fake_run_native_lean_workflow)
+    config = fq.EvalConfig(model_name="gpt-5.5")
+    toolchain = fq.ComparatorToolchain(
+        comparator_binary=tmp_path / "bin" / "comparator",
+        landrun_binary=tmp_path / "landrun" / "landrun",
+        lean4export_binary=tmp_path / "lean4export" / "lean4export",
+    )
+
+    result = fq._run_native_backend(
+        config,
+        command="/autoformalize test",
+        workspace_root=tmp_path,
+        toolchain=toolchain,
+        extra_guidance=["retry feedback"],
+    )
+
+    assert result.returncode == 0
+    assert captured["kwargs"]["toolset"] == "opengauss-lean"
+    assert captured["kwargs"]["extra_env"]["GAUSS_COMPARATOR_BINARY"] == str(toolchain.comparator_binary)
+    assert "retry feedback" in captured["kwargs"]["extra_system_guidance"]
+
+
+def test_native_backend_cli_command_does_not_shadow_subcommand(monkeypatch, tmp_path: Path):
+    captured = {}
+    result_path = tmp_path / "backend-result.json"
+
+    def fake_run_native_lean_workflow(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+
+        class Result:
+            success = True
+            final_response = "ok"
+            error = ""
+            messages = []
+
+        return Result()
+
+    monkeypatch.setattr(fq, "run_native_lean_workflow", fake_run_native_lean_workflow)
+
+    exit_code = fq.main(
+        [
+            "_native-backend",
+            "--command",
+            "/autoformalize test",
+            "--cwd",
+            str(tmp_path),
+            "--model",
+            "gpt-5.5",
+            "--reasoning-effort",
+            "high",
+            "--max-iterations",
+            "3",
+            "--toolset",
+            "opengauss-lean",
+            "--result-path",
+            str(result_path),
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["command"] == "/autoformalize test"
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert payload["returncode"] == 0
+
+
+def test_retry_loop_feeds_illegal_axiom_feedback(monkeypatch, tmp_path: Path):
+    cached_repo = tmp_path / "formalqualbench-cache"
+    cached_repo.mkdir(parents=True)
+    (cached_repo / "lakefile.toml").write_text("name = \"FormalQualBench\"\n", encoding="utf-8")
+    task_dir = cached_repo / "FormalQualBench" / "ParisHarringtonPrinciple"
+    task_dir.mkdir(parents=True)
+    (task_dir / "Main.lean").write_text(
+        "namespace ParisHarringtonPrinciple\n theorem MainTheorem : True := by sorry\nend ParisHarringtonPrinciple\n",
+        encoding="utf-8",
+    )
+    comparator_calls = {"count": 0}
+    backend_commands: list[str] = []
+
+    def fake_run_checked(command, *, cwd, env=None, timeout_seconds=None):
+        del cwd, env, timeout_seconds
+        if command[:2] == ["lake", "build"]:
+            return fq.ProcessResult(returncode=0, stdout="lake ok", stderr="", duration_seconds=1.0)
+        if command[:2] == ["lake", "env"]:
+            comparator_calls["count"] += 1
+            if comparator_calls["count"] == 1:
+                return fq.ProcessResult(
+                    returncode=1,
+                    stdout="",
+                    stderr="Illegal axiom detected: bad_axiom",
+                    duration_seconds=1.0,
+                )
+            return fq.ProcessResult(returncode=0, stdout="comparator ok", stderr="", duration_seconds=1.0)
+        raise AssertionError(f"Unexpected command: {command}")
+
+    def fake_run_native_backend(config, *, command, workspace_root, toolchain=None, extra_guidance=None):
+        assert config.workflow_lane == "native"
+        assert toolchain is not None
+        assert extra_guidance
+        backend_commands.append(command)
+        (workspace_root / "Solution.lean").write_text(
+            "namespace ParisHarringtonPrinciple\n theorem MainTheorem : True := by trivial\nend ParisHarringtonPrinciple\n",
+            encoding="utf-8",
+        )
+        return fq.ProcessResult(returncode=0, stdout="backend ok", stderr="", duration_seconds=1.0)
+
+    monkeypatch.setattr(fq, "_run_checked", fake_run_checked)
+    monkeypatch.setattr(fq, "_run_native_backend", fake_run_native_backend)
+    config = fq.EvalConfig(
+        system_name="opengauss-gpt55-direct-failed2",
+        max_attempts=2,
+    )
+
+    result = fq._run_one_task(
+        config,
+        cached_repo=cached_repo,
+        toolchain=fq.ComparatorToolchain(
+            comparator_binary=tmp_path / "comparator",
+            landrun_binary=tmp_path / "landrun",
+            lean4export_binary=tmp_path / "lean4export",
+        ),
+        output_root=tmp_path / "run",
+        task_name="ParisHarringtonPrinciple",
+        bundle=fq.OverrideBundle(),
+    )
+
+    assert result["comparator_valid"] is True
+    assert result["score"] == 1.0
+    assert result["attempt_count"] == 2
+    assert result["attempts"][0]["failure_kind"] == "illegal_axiom"
+    assert "Illegal axiom detected" in backend_commands[1]
+    assert (tmp_path / "run" / "artifacts" / "ParisHarringtonPrinciple" / "attempt_1" / "result.json").is_file()
+    assert (tmp_path / "run" / "artifacts" / "ParisHarringtonPrinciple" / "attempt_2" / "Solution.lean").is_file()
 
 
 def test_evaluate_config_writes_summary_with_call_counts_and_artifacts(monkeypatch, tmp_path: Path):

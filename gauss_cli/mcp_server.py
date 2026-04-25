@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +19,8 @@ from gauss_cli.config import load_config
 from gauss_cli.lean_service import (
     AxleProofService,
     LeanProofServiceError,
+    local_lake_build,
+    local_lean_check_file,
     local_lean_lsp_definition,
     local_lean_lsp_diagnostics,
     local_lean_lsp_goals,
@@ -24,11 +28,14 @@ from gauss_cli.lean_service import (
     local_lean_lsp_references,
     local_lean_lsp_symbols,
     local_lean_proof_context,
+    local_lean_project_status,
+    local_lean_sorry_report,
     resolve_axle_environment,
 )
 from gauss_cli.lean_comparator import local_lean_comparator_check
 from gauss_cli.lean_workflow import (
     LeanWorkflowError,
+    NATIVE_LEAN_TOOLSET,
     prepare_native_lean_workflow,
     run_native_lean_workflow,
 )
@@ -48,6 +55,9 @@ from gauss_cli.project import (
 )
 from gauss_state import SessionDB
 from swarm_manager import SwarmManager, SwarmTask
+from tools.file_tools import patch_tool, read_file_tool, search_tool, write_file_tool
+from tools.lean_project_shell_tool import _lean_project_inspect_tool
+from toolsets import resolve_toolset
 
 SERVER_NAME = "opengauss"
 _SENSITIVE_ENV_FRAGMENTS = (
@@ -71,6 +81,29 @@ _WORKFLOW_TOOL_SPECS: tuple[tuple[str, str, str], ...] = (
     ("autoprove", "/autoprove", "Run the OpenGauss autoprove workflow."),
     ("formalize", "/formalize", "Run the OpenGauss formalize workflow."),
 )
+
+CODEX_MCP_TOOL_ALIASES: dict[str, str] = {
+    "read_file": "gauss_read_file",
+    "write_file": "gauss_write_file",
+    "patch": "gauss_patch",
+    "search_files": "gauss_search_files",
+    "lean_project_status": "gauss_lean_project_status",
+    "lean_sorry_report": "gauss_lean_sorry_report",
+    "lean_lake_build": "gauss_lean_lake_build",
+    "lean_check_file": "gauss_lean_check_file",
+    "lean_lsp_diagnostics": "gauss_lean_lsp_diagnostics",
+    "lean_lsp_goals": "gauss_lean_lsp_goals",
+    "lean_lsp_hover": "gauss_lean_lsp_hover",
+    "lean_lsp_definition": "gauss_lean_lsp_definition",
+    "lean_lsp_references": "gauss_lean_lsp_references",
+    "lean_lsp_symbols": "gauss_lean_lsp_symbols",
+    "lean_proof_context": "gauss_lean_proof_context",
+    "lean_comparator_check": "gauss_lean_comparator_check",
+    "lean_project_inspect": "gauss_lean_project_inspect",
+}
+
+for _tool_name in resolve_toolset(NATIVE_LEAN_TOOLSET):
+    CODEX_MCP_TOOL_ALIASES.setdefault(_tool_name, _tool_name)
 
 
 def _ensure_fastmcp() -> type[FastMCP]:
@@ -657,6 +690,196 @@ def _native_lean_error_payload(operation: str, exc: Exception) -> dict[str, Any]
     }
 
 
+def _payload_from_json_tool(raw: str, *, operation: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return _native_lean_error_payload(operation, exc)
+    if not isinstance(payload, dict):
+        return {
+            "success": False,
+            "provider": "local",
+            "operation": operation,
+            "error": f"Unexpected tool payload type: {type(payload).__name__}",
+            "error_type": "invalid_payload",
+            "mcp_adapter": True,
+        }
+    payload.setdefault("success", "error" not in payload)
+    payload.setdefault("provider", "local")
+    payload.setdefault("operation", operation)
+    payload["mcp_adapter"] = True
+    return payload
+
+
+def _active_project_root_for_tool(cwd: str | None = None) -> Path:
+    active_cwd = _resolve_cwd(cwd)
+    try:
+        return discover_gauss_project(active_cwd).root
+    except Exception:
+        return active_cwd
+
+
+@contextmanager
+def _mcp_file_tool_environment(cwd: str | None = None):
+    project_root = _active_project_root_for_tool(cwd)
+    previous_cwd = Path.cwd()
+    previous_terminal_cwd = os.environ.get("TERMINAL_CWD")
+    os.environ["TERMINAL_CWD"] = str(project_root)
+    os.chdir(project_root)
+    try:
+        yield project_root, f"mcp-opengauss-{abs(hash(str(project_root)))}"
+    finally:
+        os.chdir(previous_cwd)
+        if previous_terminal_cwd is None:
+            os.environ.pop("TERMINAL_CWD", None)
+        else:
+            os.environ["TERMINAL_CWD"] = previous_terminal_cwd
+
+
+def gauss_read_file(
+    path: str,
+    *,
+    cwd: str | None = None,
+    offset: int = 1,
+    limit: int = 500,
+) -> dict[str, Any]:
+    """Adapter over the same file read tool available to the native Lean harness."""
+    with _mcp_file_tool_environment(cwd) as (_project_root, task_id):
+        raw = read_file_tool(path=path, offset=offset, limit=limit, task_id=task_id)
+    return _payload_from_json_tool(raw, operation="read_file")
+
+
+def gauss_write_file(
+    path: str,
+    content: str,
+    *,
+    cwd: str | None = None,
+) -> dict[str, Any]:
+    """Adapter over the same file write tool available to the native Lean harness."""
+    with _mcp_file_tool_environment(cwd) as (_project_root, task_id):
+        raw = write_file_tool(path=path, content=content, task_id=task_id)
+    return _payload_from_json_tool(raw, operation="write_file")
+
+
+def gauss_patch(
+    *,
+    cwd: str | None = None,
+    mode: str = "replace",
+    path: str | None = None,
+    old_string: str | None = None,
+    new_string: str | None = None,
+    replace_all: bool = False,
+    patch: str | None = None,
+) -> dict[str, Any]:
+    """Adapter over the same targeted patch tool available to the native Lean harness."""
+    with _mcp_file_tool_environment(cwd) as (_project_root, task_id):
+        raw = patch_tool(
+            mode=mode,
+            path=path,
+            old_string=old_string,
+            new_string=new_string,
+            replace_all=replace_all,
+            patch=patch,
+            task_id=task_id,
+        )
+    return _payload_from_json_tool(raw, operation="patch")
+
+
+def gauss_search_files(
+    pattern: str,
+    *,
+    cwd: str | None = None,
+    target: str = "content",
+    path: str = ".",
+    file_glob: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    output_mode: str = "content",
+    context: int = 0,
+) -> dict[str, Any]:
+    """Adapter over the same file search tool available to the native Lean harness."""
+    with _mcp_file_tool_environment(cwd) as (_project_root, task_id):
+        raw = search_tool(
+            pattern=pattern,
+            target=target,
+            path=path,
+            file_glob=file_glob,
+            limit=limit,
+            offset=offset,
+            output_mode=output_mode,
+            context=context,
+            task_id=task_id,
+        )
+    return _payload_from_json_tool(raw, operation="search_files")
+
+
+def gauss_lean_project_status(*, cwd: str | None = None) -> dict[str, Any]:
+    """Adapter over native Lean project status."""
+    try:
+        payload = local_lean_project_status(cwd=cwd)
+    except Exception as exc:
+        return _native_lean_error_payload("lean_project_status", exc)
+    return {"success": True, "provider": "local", "operation": "lean_project_status", "mcp_adapter": True, **payload}
+
+
+def gauss_lean_sorry_report(
+    *,
+    cwd: str | None = None,
+    path: str | None = None,
+) -> dict[str, Any]:
+    """Adapter over native Lean sorry/admit reporting."""
+    try:
+        payload = local_lean_sorry_report(cwd=cwd, path=path)
+    except Exception as exc:
+        return _native_lean_error_payload("lean_sorry_report", exc)
+    return {"success": True, "provider": "local", "operation": "lean_sorry_report", "mcp_adapter": True, **payload}
+
+
+def gauss_lean_lake_build(
+    *,
+    cwd: str | None = None,
+    targets: list[str] | None = None,
+    timeout_seconds: int = 30 * 60,
+) -> dict[str, Any]:
+    """Adapter over native controlled Lake build."""
+    try:
+        payload = local_lake_build(cwd=cwd, targets=targets, timeout_seconds=timeout_seconds)
+    except Exception as exc:
+        return _native_lean_error_payload("lean_lake_build", exc)
+    return {"provider": "local", "operation": "lean_lake_build", "mcp_adapter": True, **payload}
+
+
+def gauss_lean_check_file(
+    path: str,
+    *,
+    cwd: str | None = None,
+    timeout_seconds: int = 30 * 60,
+) -> dict[str, Any]:
+    """Adapter over native controlled Lean file check."""
+    try:
+        payload = local_lean_check_file(path=path, cwd=cwd, timeout_seconds=timeout_seconds)
+    except Exception as exc:
+        return _native_lean_error_payload("lean_check_file", exc)
+    return {"provider": "local", "operation": "lean_check_file", "mcp_adapter": True, **payload}
+
+
+def gauss_lean_project_inspect(
+    command: str,
+    *,
+    cwd: str | None = None,
+    timeout_seconds: int = 60,
+    max_output_chars: int = 20000,
+) -> dict[str, Any]:
+    """Adapter over native controlled read-only project inspection."""
+    raw = _lean_project_inspect_tool(
+        command=command,
+        cwd=cwd,
+        timeout_seconds=timeout_seconds,
+        max_output_chars=max_output_chars,
+    )
+    return _payload_from_json_tool(raw, operation="lean_project_inspect")
+
+
 def gauss_lean_lsp_diagnostics(
     path: str,
     *,
@@ -934,7 +1157,7 @@ def gauss_autoformalize_prepare(
 
     try:
         active_cwd = _resolve_cwd(cwd)
-        plan = prepare_native_lean_workflow(command, cwd=active_cwd)
+        plan = prepare_native_lean_workflow(command, cwd=active_cwd, toolset=NATIVE_LEAN_TOOLSET)
     except (LeanWorkflowError, ProjectCommandError, ProjectManifestError) as exc:
         raise ValueError(str(exc)) from exc
 
@@ -971,13 +1194,13 @@ def gauss_autoformalize_run(
 
     try:
         active_cwd = _resolve_cwd(cwd)
-        plan = prepare_native_lean_workflow(command, cwd=active_cwd)
+        plan = prepare_native_lean_workflow(command, cwd=active_cwd, toolset=NATIVE_LEAN_TOOLSET)
     except (LeanWorkflowError, ProjectCommandError, ProjectManifestError) as exc:
         raise ValueError(str(exc)) from exc
 
     start = time.time()
     try:
-        result = run_native_lean_workflow(command, cwd=active_cwd)
+        result = run_native_lean_workflow(command, cwd=active_cwd, toolset=NATIVE_LEAN_TOOLSET)
         stdout_text = result.final_response or ""
         stderr_text = result.error or ""
         timed_out = False
@@ -1045,7 +1268,7 @@ def _run_spawned_native_workflow(
     start = time.time()
     task.progress = "Running native OpenGauss Lean workflow"
     try:
-        result = run_native_lean_workflow(command, cwd=cwd)
+        result = run_native_lean_workflow(command, cwd=cwd, toolset=NATIVE_LEAN_TOOLSET)
         stdout_preview, _, _ = _truncate_output(result.final_response or "", max_chars=max_output_chars)
         stderr_preview, _, _ = _truncate_output(result.error or "", max_chars=max_output_chars)
         if result.success:
@@ -1081,7 +1304,7 @@ def gauss_autoformalize_spawn(
 
     try:
         active_cwd = _resolve_cwd(cwd)
-        plan = prepare_native_lean_workflow(command, cwd=active_cwd)
+        plan = prepare_native_lean_workflow(command, cwd=active_cwd, toolset=NATIVE_LEAN_TOOLSET)
     except (LeanWorkflowError, ProjectCommandError, ProjectManifestError) as exc:
         raise ValueError(str(exc)) from exc
 
@@ -1218,6 +1441,22 @@ def build_server() -> FastMCP:
         description="Create a new OpenGauss project from a configured blueprint template.",
     )(gauss_project_create)
     server.tool(
+        name="gauss_read_file",
+        description="Read a file through the OpenGauss harness file tool.",
+    )(gauss_read_file)
+    server.tool(
+        name="gauss_write_file",
+        description="Write a file through the OpenGauss harness file tool.",
+    )(gauss_write_file)
+    server.tool(
+        name="gauss_patch",
+        description="Patch files through the OpenGauss harness patch tool.",
+    )(gauss_patch)
+    server.tool(
+        name="gauss_search_files",
+        description="Search files through the OpenGauss harness search tool.",
+    )(gauss_search_files)
+    server.tool(
         name="axle_environments",
         description="List AXLE Lean environments available to the active OpenGauss runtime.",
     )(axle_environments)
@@ -1250,6 +1489,22 @@ def build_server() -> FastMCP:
         description="Rename Lean declarations with AXLE using project-aware environment resolution.",
     )(axle_rename)
     server.tool(
+        name="gauss_lean_project_status",
+        description="Return native OpenGauss Lean project status.",
+    )(gauss_lean_project_status)
+    server.tool(
+        name="gauss_lean_sorry_report",
+        description="Report Lean sorry/admit findings through native OpenGauss services.",
+    )(gauss_lean_sorry_report)
+    server.tool(
+        name="gauss_lean_lake_build",
+        description="Run controlled native `lake build` for the active OpenGauss Lean project.",
+    )(gauss_lean_lake_build)
+    server.tool(
+        name="gauss_lean_check_file",
+        description="Run controlled native `lake env lean <file>` for the active OpenGauss Lean project.",
+    )(gauss_lean_check_file)
+    server.tool(
         name="gauss_lean_lsp_diagnostics",
         description="Return native Lean diagnostics for a file; MCP is only an adapter.",
     )(gauss_lean_lsp_diagnostics)
@@ -1281,6 +1536,10 @@ def build_server() -> FastMCP:
         name="gauss_lean_comparator_check",
         description="Run native Comparator proof audit; MCP is only an adapter.",
     )(gauss_lean_comparator_check)
+    server.tool(
+        name="gauss_lean_project_inspect",
+        description="Run controlled read-only project inspection through the OpenGauss Lean harness.",
+    )(gauss_lean_project_inspect)
     server.tool(
         name="gauss_sessions_list",
         description="List stored OpenGauss sessions with previews and activity metadata.",

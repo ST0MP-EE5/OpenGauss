@@ -127,4 +127,15 @@ print(json.dumps(sorted(set(entry.toolset for entry in registry._tools.values())
     )
 
     toolsets = json.loads(result.stdout.strip())
-    assert toolsets == ["axle", "browser", "file", "lean-comparator", "lean-local", "lean-lsp", "web"]
+    assert toolsets == [
+        "axle",
+        "browser",
+        "file",
+        "lean-comparator",
+        "lean-local",
+        "lean-lsp",
+        "lean-project-inspect",
+        "skills",
+        "terminal",
+        "web",
+    ]

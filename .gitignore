@@ -1,5 +1,6 @@
 /venv/
 /_pycache/
+.DS_Store
 *.pyc*
 __pycache__/
 .venv/
@@ -53,6 +54,16 @@ environments/benchmarks/evals/
 .formalqualbench-runs/
 .formalqualbench-smoke/
 .plans/
+
+# Lean/OpenGauss generated project state
+**/.lake/
+**/.gauss/cache/
+**/.gauss/runtime/
+
+# Local study/source assets; keep on disk, do not put large PDFs or private
+# notebook config into git.
+Sources/
+Wolfram/
 
 # Release script temp files
 .release_notes.md

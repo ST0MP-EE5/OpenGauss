@@ -224,63 +224,6 @@ class TestVisionClientFallback:
         assert client is None
         assert model is None
 
-    def test_vision_auto_includes_anthropic_when_configured(self, monkeypatch):
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03-key")
-        with (
-            patch("agent.auxiliary_client._read_nous_auth", return_value=None),
-            patch("agent.anthropic_adapter.build_anthropic_client", return_value=MagicMock()),
-            patch("agent.anthropic_adapter.resolve_anthropic_token", return_value="sk-ant-api03-key"),
-        ):
-            backends = get_available_vision_backends()
-
-        assert "anthropic" in backends
-
-    def test_resolve_provider_client_returns_native_anthropic_wrapper(self, monkeypatch):
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03-key")
-        with (
-            patch("agent.auxiliary_client._read_nous_auth", return_value=None),
-            patch("agent.anthropic_adapter.build_anthropic_client", return_value=MagicMock()),
-            patch("agent.anthropic_adapter.resolve_anthropic_token", return_value="sk-ant-api03-key"),
-        ):
-            client, model = resolve_provider_client("anthropic")
-
-        assert client is not None
-        assert client.__class__.__name__ == "AnthropicAuxiliaryClient"
-        assert model == "claude-haiku-4-5-20251001"
-
-    def test_vision_auto_uses_anthropic_when_no_higher_priority_backend(self, monkeypatch):
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03-key")
-        with (
-            patch("agent.auxiliary_client._read_nous_auth", return_value=None),
-            patch("agent.anthropic_adapter.build_anthropic_client", return_value=MagicMock()),
-            patch("agent.anthropic_adapter.resolve_anthropic_token", return_value="sk-ant-api03-key"),
-        ):
-            client, model = get_vision_auxiliary_client()
-
-        assert client is not None
-        assert client.__class__.__name__ == "AnthropicAuxiliaryClient"
-        assert model == "claude-haiku-4-5-20251001"
-
-    def test_selected_anthropic_provider_is_preferred_for_vision_auto(self, monkeypatch):
-        monkeypatch.setenv("OPENROUTER_API_KEY", "or-key")
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03-key")
-
-        def fake_load_config():
-            return {"model": {"provider": "anthropic", "default": "claude-sonnet-4-6"}}
-
-        with (
-            patch("agent.auxiliary_client._read_nous_auth", return_value=None),
-            patch("agent.anthropic_adapter.build_anthropic_client", return_value=MagicMock()),
-            patch("agent.anthropic_adapter.resolve_anthropic_token", return_value="sk-ant-api03-key"),
-            patch("agent.auxiliary_client.OpenAI") as mock_openai,
-            patch("gauss_cli.config.load_config", fake_load_config),
-        ):
-            client, model = get_vision_auxiliary_client()
-
-        assert client is not None
-        assert client.__class__.__name__ == "AnthropicAuxiliaryClient"
-        assert model == "claude-haiku-4-5-20251001"
-
     def test_vision_auto_includes_codex(self, codex_auth_dir):
         """Codex supports vision (gpt-5.3-codex), so auto mode should use it."""
         with patch("agent.auxiliary_client._read_nous_auth", return_value=None), \

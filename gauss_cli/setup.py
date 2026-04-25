@@ -721,7 +721,6 @@ def setup_model_provider(config: dict):
         "Kimi / Moonshot (Kimi coding models)",
         "MiniMax (global endpoint)",
         "MiniMax China (mainland China endpoint)",
-        "Anthropic (Claude models — API key or Claude Code subscription)",
     ]
     if keep_label:
         provider_choices.append(keep_label)
@@ -1126,111 +1125,7 @@ def setup_model_provider(config: dict):
         _set_model_provider(config, "minimax-cn", pconfig.inference_base_url)
         selected_base_url = pconfig.inference_base_url
 
-    elif provider_idx == 8:  # Anthropic
-        selected_provider = "anthropic"
-        print()
-        print_header("Anthropic Authentication")
-        from gauss_cli.auth import PROVIDER_REGISTRY
-        from gauss_cli.config import save_anthropic_api_key, save_anthropic_oauth_token
-        pconfig = PROVIDER_REGISTRY["anthropic"]
-
-        # Check ALL credential sources
-        import os as _os
-        from agent.anthropic_adapter import (
-            read_claude_code_credentials, is_claude_code_token_valid,
-            run_oauth_setup_token,
-        )
-        cc_creds = read_claude_code_credentials()
-        cc_valid = bool(cc_creds and is_claude_code_token_valid(cc_creds))
-
-        existing_key = (
-            get_env_value("ANTHROPIC_TOKEN")
-            or get_env_value("ANTHROPIC_API_KEY")
-            or _os.getenv("CLAUDE_CODE_OAUTH_TOKEN", "")
-        )
-
-        has_creds = bool(existing_key) or cc_valid
-        needs_auth = not has_creds
-
-        if has_creds:
-            if existing_key:
-                print_info(f"Current credentials: {existing_key[:12]}...")
-            elif cc_valid:
-                print_success("Found valid Claude Code credentials (auto-detected)")
-
-            auth_choices = [
-                "Use existing credentials",
-                "Reauthenticate (new OAuth login)",
-                "Cancel",
-            ]
-            choice_idx = prompt_choice("What would you like to do?", auth_choices, 0)
-            if choice_idx == 1:
-                needs_auth = True
-            elif choice_idx == 2:
-                pass  # fall through to provider config
-
-        if needs_auth:
-            auth_choices = [
-                "Claude Pro/Max subscription (OAuth login)",
-                "Anthropic API key (pay-per-token)",
-            ]
-            auth_idx = prompt_choice("Choose authentication method:", auth_choices, 0)
-
-            if auth_idx == 0:
-                # OAuth setup-token flow
-                try:
-                    print()
-                    print_info("Running 'claude setup-token' — follow the prompts below.")
-                    print_info("A browser window will open for you to authorize access.")
-                    print()
-                    token = run_oauth_setup_token()
-                    if token:
-                        save_anthropic_oauth_token(token, save_fn=save_env_value)
-                        print_success("OAuth credentials saved")
-                    else:
-                        # Subprocess completed but no token auto-detected
-                        print()
-                        token = prompt("Paste setup-token here (if displayed above)", password=True)
-                        if token:
-                            save_anthropic_oauth_token(token, save_fn=save_env_value)
-                            print_success("Setup-token saved")
-                        else:
-                            print_warning("Skipped — agent won't work without credentials")
-                except FileNotFoundError:
-                    print()
-                    print_info("The 'claude' CLI is required for OAuth login.")
-                    print()
-                    print_info("To install: npm install -g @anthropic-ai/claude-code")
-                    print_info("Then run:   claude setup-token")
-                    print_info("Or paste an existing setup-token below:")
-                    print()
-                    token = prompt("Setup-token (sk-ant-oat-...)", password=True)
-                    if token:
-                        save_anthropic_oauth_token(token, save_fn=save_env_value)
-                        print_success("Setup-token saved")
-                    else:
-                        print_warning("Skipped — install Claude Code and re-run setup")
-            else:
-                print()
-                print_info("Get an API key at: https://console.anthropic.com/settings/keys")
-                print()
-                api_key = prompt("API key (sk-ant-...)", password=True)
-                if api_key:
-                    save_anthropic_api_key(api_key, save_fn=save_env_value)
-                    print_success("API key saved")
-                else:
-                    print_warning("Skipped — agent won't work without credentials")
-
-        # Clear custom endpoint vars if switching
-        if existing_custom:
-            save_env_value("OPENAI_BASE_URL", "")
-            save_env_value("OPENAI_API_KEY", "")
-        # Don't save base_url for Anthropic — resolve_runtime_provider()
-        # always hardcodes it. Stale base_urls contaminate other providers.
-        _set_model_provider(config, "anthropic")
-        selected_base_url = ""
-
-    # else: provider_idx == 9 (Keep current) — only shown when a provider already exists
+    # else: provider_idx == 8 (Keep current) — only shown when a provider already exists
     # Normalize "keep current" to an explicit provider so downstream logic
     # doesn't fall back to the generic OpenRouter/static-model path.
     if selected_provider is None:
@@ -1266,7 +1161,6 @@ def setup_model_provider(config: dict):
             "kimi-coding": "Kimi / Moonshot",
             "minimax": "MiniMax",
             "minimax-cn": "MiniMax CN",
-            "anthropic": "Anthropic",
             "custom": "your custom endpoint",
         }
         _prov_display = _prov_names.get(selected_provider, selected_provider or "your provider")
@@ -1326,11 +1220,11 @@ def setup_model_provider(config: dict):
     if selected_provider != "custom":  # Custom already prompted for model name
         print_header("Default Model")
 
-        _raw_model = config.get("model", "anthropic/claude-opus-4.6")
+        _raw_model = config.get("model", "gpt-5.5")
         current_model = (
-            _raw_model.get("default", "anthropic/claude-opus-4.6")
+            _raw_model.get("default", "gpt-5.5")
             if isinstance(_raw_model, dict)
-            else (_raw_model or "anthropic/claude-opus-4.6")
+            else (_raw_model or "gpt-5.5")
         )
         print_info(f"Current: {current_model}")
 
@@ -1366,7 +1260,7 @@ def setup_model_provider(config: dict):
             # Nous login succeeded but model fetch failed — prompt manually
             # instead of falling through to the OpenRouter static list.
             print_warning("Could not fetch available models from Nous Portal.")
-            print_info("Enter a Nous model name manually (e.g., claude-opus-4-6).")
+            print_info("Enter a Nous model name manually (e.g., gpt-5.5).")
             custom = prompt(f"  Model name (Enter to keep '{current_model}')")
             if custom:
                 _set_default_model(config, custom)
@@ -1405,29 +1299,6 @@ def setup_model_provider(config: dict):
                 config, selected_provider, current_model,
                 prompt_choice, prompt,
             )
-        elif selected_provider == "anthropic":
-            # Try live model list first, fall back to static
-            from gauss_cli.models import provider_model_ids
-            live_models = provider_model_ids("anthropic")
-            anthropic_models = live_models if live_models else [
-                "claude-opus-4-6",
-                "claude-sonnet-4-6",
-                "claude-haiku-4-5-20251001",
-            ]
-            model_choices = list(anthropic_models)
-            model_choices.append("Custom model")
-            model_choices.append(f"Keep current ({current_model})")
-
-            keep_idx = len(model_choices) - 1
-            model_idx = prompt_choice("Select default model:", model_choices, keep_idx)
-
-            if model_idx < len(anthropic_models):
-                _set_default_model(config, anthropic_models[model_idx])
-            elif model_idx == len(anthropic_models):
-                custom = prompt("Enter model name (e.g., claude-sonnet-4-20250514)")
-                if custom:
-                    _set_default_model(config, custom)
-            # else: keep current
         else:
             # Static list for OpenRouter / fallback (from canonical list)
             from gauss_cli.models import model_ids, menu_labels
@@ -1444,7 +1315,7 @@ def setup_model_provider(config: dict):
             if model_idx < len(ids):
                 _set_default_model(config, ids[model_idx])
             elif model_idx == len(ids):  # Custom
-                custom = prompt("Enter model name (e.g., anthropic/claude-opus-4.6)")
+                custom = prompt("Enter model name (e.g., openai/gpt-5.5)")
                 if custom:
                     _set_default_model(config, custom)
             # else: Keep current
@@ -1461,7 +1332,7 @@ def setup_model_provider(config: dict):
     # Write provider+base_url to config.yaml only after model selection is complete.
     # This prevents the runtime from picking up a new provider before the model
     # name has been updated to match.
-    if selected_provider in ("zai", "kimi-coding", "minimax", "minimax-cn", "anthropic") and selected_base_url is not None:
+    if selected_provider in ("zai", "kimi-coding", "minimax", "minimax-cn") and selected_base_url is not None:
         _update_config_for_provider(selected_provider, selected_base_url)
 
     save_config(config)

@@ -1,7 +1,7 @@
 {
   "name": "gauss-agent",
   "version": "1.0.0",
-  "description": "Gauss is a focused Lean autoformalization workspace with a managed Claude Code launcher.",
+  "description": "Gauss is a focused Lean autoformalization workspace with a Codex frontend over the OpenGauss harness.",
   "private": true,
   "scripts": {
     "postinstall": "echo '✅ Browser tools ready. Run: python run_agent.py --help'"

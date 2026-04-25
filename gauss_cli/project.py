@@ -249,6 +249,9 @@ def discover_gauss_project(start: str | Path) -> GaussProject:
         gauss_dir = candidate / GAUSS_PROJECT_DIRNAME
         if not gauss_dir.exists():
             continue
+        manifest_path = gauss_dir / GAUSS_PROJECT_MANIFEST_FILENAME
+        if not manifest_path.is_file():
+            continue
         return load_gauss_project(candidate)
 
     raise ProjectNotFoundError(

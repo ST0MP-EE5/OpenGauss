@@ -45,7 +45,7 @@ CREATE_WORKSPACE=false
 AUTO_CONFIGURED_MAIN_PROVIDER=false
 SETUP_MODE="auto"
 CLI_SELF_CHECK_STATUS=""
-NATIVE_SELF_CHECK_STATUS=""
+MANAGED_SELF_CHECK_STATUS=""
 
 OS=""
 DISTRO=""
@@ -907,11 +907,8 @@ PY
     if [ -d "$WORKSPACE_DIR" ]; then
         "$GAUSS_BIN" config set terminal.cwd "$WORKSPACE_DIR"
     fi
-    "$GAUSS_BIN" config set gauss.autoformalize.backend native
+    "$GAUSS_BIN" config set gauss.autoformalize.backend codex
     "$GAUSS_BIN" config set gauss.autoformalize.auth_mode auto
-    "$GAUSS_BIN" config set gauss.workflow.provider openai-codex
-    "$GAUSS_BIN" config set gauss.workflow.model gpt-5.5
-    "$GAUSS_BIN" config set gauss.workflow.toolset opengauss-lean
     "$GAUSS_BIN" config set agent.max_turns 90
 
     log_success "Gauss defaults applied"
@@ -1417,7 +1414,7 @@ Commit: $(git -C "$REPO_ROOT" rev-parse --short=12 HEAD 2>/dev/null || printf 'u
 Lean project: $WORKSPACE_DIR
 Guide: __GUIDE_PATH__
 Gauss project manifest: initialized
-Native Lean runtime: openai-codex:gpt-5.5
+Managed Lean backend: codex
 Main chat: ${main_chat_status}
 
 Start here:
@@ -1507,52 +1504,36 @@ auto_configure_main_provider() {
     fi
 }
 
-prepare_native_runtime_assets() {
-    log_info "Checking native Lean workflow assets..."
+prepare_managed_runtime_assets() {
+    log_info "Prewarming managed Lean workflow assets..."
 
-    local native_status
-    if ! native_status="$("$VENV_PYTHON" - "$WORKSPACE_DIR" "$REPO_ROOT" <<'PY'
-import sys
-from pathlib import Path
+    local managed_status
+    if ! managed_status="$("$VENV_PYTHON" - <<'PY'
+import os
 
-workspace_dir = Path(sys.argv[1]).resolve()
-repo_root = Path(sys.argv[2]).resolve()
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from gauss_cli.autoformalize import prepare_managed_runtime_assets
 
-from gauss_cli.lean_service import local_lean_project_status
-from toolsets import resolve_toolset
+prepared = prepare_managed_runtime_assets(env=os.environ)
+revision = prepared.get("skill_revision", "").strip()
+claude_plugin_root = prepared.get("claude_plugin_root", "").strip()
 
-tools = set(resolve_toolset("opengauss-lean"))
-required = {
-    "read_file",
-    "write_file",
-    "patch",
-    "search_files",
-    "axle_check",
-    "lean_project_status",
-    "lean_lake_build",
-    "lean_check_file",
-}
-missing = sorted(required - tools)
-if missing:
-    raise SystemExit(f"missing opengauss-lean tools: {', '.join(missing)}")
-
-if (workspace_dir / ".gauss" / "project.yaml").exists():
-    status = local_lean_project_status(cwd=workspace_dir)
-    print(
-        f"opengauss-lean ready; {status['lean_files']} Lean files; "
-        f"{status['sorry_count']} sorry/admit markers"
-    )
+parts = []
+if revision:
+    parts.append(f"lean4-skills {revision[:12]}")
+if prepared.get("lean_lsp_mcp_spec", "").strip():
+    parts.append(f"lean-lsp-mcp {prepared['lean_lsp_mcp_spec']}")
+if claude_plugin_root:
+    parts.append(f"Claude plugin {claude_plugin_root}")
 else:
-    print("opengauss-lean ready")
+    parts.append("Claude plugin skipped")
+print("; ".join(parts))
 PY
     )"; then
-        log_error "Native Lean workflow asset check failed."
+        log_error "Managed Lean workflow prewarm failed."
         exit 1
     fi
 
-    log_success "Native Lean workflow assets ready: $native_status"
+    log_success "Managed Lean workflow assets ready: $managed_status"
 }
 
 run_post_install_self_check() {
@@ -1570,7 +1551,9 @@ run_post_install_self_check() {
 
     if [ -f "$WORKSPACE_DIR/.gauss/project.yaml" ] && { [ -f "$WORKSPACE_DIR/lakefile.lean" ] || [ -f "$WORKSPACE_DIR/lakefile.toml" ]; }; then
         if "$VENV_PYTHON" - "$WORKSPACE_DIR" "$REPO_ROOT" <<'PY'
+import os
 import sys
+import json
 from pathlib import Path
 
 workspace_dir = Path(sys.argv[1]).resolve()
@@ -1578,28 +1561,40 @@ repo_root = Path(sys.argv[2]).resolve()
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from gauss_cli.lean_workflow import prepare_native_lean_workflow
+from gauss_cli.autoformalize import resolve_autoformalize_request
+from gauss_cli.config import load_config
 
-plan = prepare_native_lean_workflow(
+env = dict(os.environ)
+env["GAUSS_AUTOFORMALIZE_AUTH_MODE"] = "login"
+plan = resolve_autoformalize_request(
     "/prove Main.lean",
-    cwd=workspace_dir,
+    load_config(),
+    active_cwd=str(workspace_dir),
+    base_env=env,
 )
-assert plan.provider == "openai-codex"
-assert plan.model == "gpt-5.5"
-assert plan.api_mode == "codex_responses"
-assert plan.toolsets == ["opengauss-lean"]
-assert plan.project_root == workspace_dir
+assert plan.backend_command.startswith("/lean4:prove")
+assert plan.managed_context.plugin_root.exists()
+assert plan.managed_context.mcp_config_path.exists()
+
+managed_plugins_root = plan.managed_context.backend_home / ".claude" / "plugins"
+known_marketplaces = json.loads((managed_plugins_root / "known_marketplaces.json").read_text(encoding="utf-8"))
+install_location = Path(known_marketplaces["lean4-skills"]["installLocation"])
+assert install_location.is_relative_to(managed_plugins_root / "marketplaces")
+
+installed_plugins = json.loads((managed_plugins_root / "installed_plugins.json").read_text(encoding="utf-8"))
+managed_install_path = Path(installed_plugins["plugins"]["lean4@lean4-skills"][0]["installPath"])
+assert managed_install_path.is_relative_to(managed_plugins_root / "cache" / "lean4-skills" / "lean4")
 PY
         then
-            NATIVE_SELF_CHECK_STATUS="$WORKSPACE_DIR"
-            log_success "Native /prove workflow verified: $NATIVE_SELF_CHECK_STATUS"
+            MANAGED_SELF_CHECK_STATUS="$WORKSPACE_DIR"
+            log_success "Managed /prove staging verified: $MANAGED_SELF_CHECK_STATUS"
         else
-            log_error "Native /prove workflow verification failed."
+            log_error "Managed /prove staging verification failed."
             exit 1
         fi
     else
-        NATIVE_SELF_CHECK_STATUS=""
-        log_info "Skipping native /prove workflow verification because no active Lean workspace was found."
+        MANAGED_SELF_CHECK_STATUS=""
+        log_info "Skipping managed /prove staging verification because no active Lean workspace was found."
     fi
 }
 
@@ -1651,8 +1646,8 @@ print_summary() {
     if [ -n "$CLI_SELF_CHECK_STATUS" ]; then
         echo "  - Verified CLI startup: $CLI_SELF_CHECK_STATUS."
     fi
-    if [ -n "$NATIVE_SELF_CHECK_STATUS" ]; then
-        echo "  - Verified native /prove workflow in: $NATIVE_SELF_CHECK_STATUS."
+    if [ -n "$MANAGED_SELF_CHECK_STATUS" ]; then
+        echo "  - Verified managed /prove staging in: $MANAGED_SELF_CHECK_STATUS."
     fi
     echo "  - The local guide is written to $GUIDE_DIR/index.html."
     echo "  - If Open Gauss feels intimidating, start with /chat for inline onboarding."
@@ -1690,7 +1685,7 @@ main() {
     ensure_shell_runtime_block
     write_helper_assets
     auto_configure_main_provider
-    prepare_native_runtime_assets
+    prepare_managed_runtime_assets
     run_post_install_self_check
     print_summary
     run_setup_wizard

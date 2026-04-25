@@ -1,4 +1,4 @@
-"""Legacy managed backend session launchers for non-native Gauss workflows."""
+"""Codex-managed OpenGauss Lean workflow launch helpers."""
 
 from __future__ import annotations
 
@@ -44,8 +44,9 @@ LEAN4_CLAUDE_PLUGIN_NAME = "lean4"
 LEAN4_CLAUDE_PLUGIN_ID = f"{LEAN4_CLAUDE_PLUGIN_NAME}@{LEAN4_CLAUDE_MARKETPLACE_NAME}"
 LEAN4_CHECKOUT_REVISION_FILE = ".gauss-managed-revision"
 CLAUDE_AUTH_ENV_KEYS = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_TOKEN", "ANTHROPIC_API_KEY")
-CODEX_AUTOFORMALIZE_BACKEND = "codex"
 CODEX_AUTH_ENV_KEYS = ("OPENAI_API_KEY",)
+CODEX_AUTOFORMALIZE_BACKEND = "codex"
+CLAUDE_AUTOFORMALIZE_BACKEND = "claude-code"
 DEFAULT_AUTOFORMALIZE_BACKEND = CODEX_AUTOFORMALIZE_BACKEND
 AUTOFORMALIZE_CODEX_MODEL_ENV = "GAUSS_AUTOFORMALIZE_CODEX_MODEL"
 AUTOFORMALIZE_MCP_PROXY_ENV = "GAUSS_AUTOFORMALIZE_MCP_PROXY"
@@ -54,7 +55,7 @@ AUTOFORMALIZE_NONINTERACTIVE_ENV = "GAUSS_AUTOFORMALIZE_NONINTERACTIVE"
 AUTOFORMALIZE_INSTRUCTIONS_TEMPLATE_ENV = "GAUSS_AUTOFORMALIZE_INSTRUCTIONS_TEMPLATE"
 AUTOFORMALIZE_STARTUP_TEMPLATE_ENV = "GAUSS_AUTOFORMALIZE_STARTUP_TEMPLATE"
 _SUPPORTED_AUTOFORMALIZE_BACKENDS = (
-    CODEX_AUTOFORMALIZE_BACKEND,
+    DEFAULT_AUTOFORMALIZE_BACKEND,
 )
 _AUTOFORMALIZE_BACKEND_ALIASES = {
     "codex": CODEX_AUTOFORMALIZE_BACKEND,
@@ -94,7 +95,7 @@ _FORGIVING_WORKFLOW_ALIAS_MAP = {
 
 
 def supported_autoformalize_backends() -> tuple[str, ...]:
-    """Return legacy managed backend identifiers that remain outside native Lean."""
+    """Return managed backend identifiers for OpenGauss Lean workflows."""
     return _SUPPORTED_AUTOFORMALIZE_BACKENDS
 
 
@@ -1544,6 +1545,15 @@ def _resolve_backend_runtime(
     include_persisted_env: bool,
     shared_bundle: SharedLeanBundle,
 ) -> AutoformalizeBackendRuntime:
+    if backend_name == CLAUDE_AUTOFORMALIZE_BACKEND:
+        return _build_claude_runtime(
+            auth_mode=auth_mode,
+            user_instruction=user_instruction,
+            workflow=workflow,
+            base_environment=base_environment,
+            include_persisted_env=include_persisted_env,
+            shared_bundle=shared_bundle,
+        )
     if backend_name == CODEX_AUTOFORMALIZE_BACKEND:
         return _build_codex_runtime(
             auth_mode=auth_mode,
@@ -1567,6 +1577,16 @@ def _resolve_managed_chat_runtime(
     managed_state_base: Path,
     real_home: Path,
 ) -> ManagedChatRuntime:
+    if backend_name == CLAUDE_AUTOFORMALIZE_BACKEND:
+        return _build_claude_chat_runtime(
+            auth_mode=auth_mode,
+            user_instruction=user_instruction,
+            base_environment=base_environment,
+            include_persisted_env=include_persisted_env,
+            active_cwd=active_cwd,
+            managed_state_base=managed_state_base,
+            real_home=real_home,
+        )
     if backend_name == CODEX_AUTOFORMALIZE_BACKEND:
         return _build_codex_chat_runtime(
             auth_mode=auth_mode,
@@ -1872,7 +1892,7 @@ def _build_claude_chat_runtime(
         base_environment=base_environment,
         include_persisted_env=include_persisted_env,
     )
-    managed_root = _managed_chat_root(managed_state_base, DEFAULT_AUTOFORMALIZE_BACKEND)
+    managed_root = _managed_chat_root(managed_state_base, CLAUDE_AUTOFORMALIZE_BACKEND)
     backend_home = managed_root / "claude-home"
     lean_assets = _prepare_managed_chat_lean_assets(
         managed_state_base=managed_state_base,
@@ -1908,7 +1928,7 @@ def _build_claude_chat_runtime(
     child_env.update(
         {
             "GAUSS_MANAGED_CHAT": "1",
-            "GAUSS_MANAGED_CHAT_BACKEND": DEFAULT_AUTOFORMALIZE_BACKEND,
+            "GAUSS_MANAGED_CHAT_BACKEND": CLAUDE_AUTOFORMALIZE_BACKEND,
             "GAUSS_CHAT_CWD": str(active_cwd),
             "GAUSS_MANAGED_STATE_DIR": str(managed_root),
             "GAUSS_REAL_HOME": str(real_home),
@@ -1927,7 +1947,7 @@ def _build_claude_chat_runtime(
         )
     argv = [claude_exe]
     prompt = _build_managed_chat_prompt(
-        backend_name=DEFAULT_AUTOFORMALIZE_BACKEND,
+        backend_name=CLAUDE_AUTOFORMALIZE_BACKEND,
         active_cwd=active_cwd,
         user_instruction=user_instruction,
     )
@@ -1936,7 +1956,7 @@ def _build_claude_chat_runtime(
     return ManagedChatRuntime(
         argv=argv,
         child_env=child_env,
-        backend_name=DEFAULT_AUTOFORMALIZE_BACKEND,
+        backend_name=CLAUDE_AUTOFORMALIZE_BACKEND,
     )
 
 

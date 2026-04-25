@@ -132,15 +132,13 @@ DEFAULT_CONFIG = {
             "legacy_cli_surface": False,
         },
         "autoformalize": {
-            "backend": "native",
-            "handoff_mode": "direct",
+            "backend": "codex",
             "auth_mode": "auto",
             "managed_state_dir": "",
         },
-        "workflow": {
-            "provider": "openai-codex",
+        "codex_frontend": {
             "model": "gpt-5.5",
-            "toolset": "opengauss-lean",
+            "reasoning_effort": "high",
         },
         "project": {
             "template_source": "",
@@ -150,7 +148,11 @@ DEFAULT_CONFIG = {
             "environment": "",
         },
     },
-    "model": "anthropic/claude-opus-4.6",
+    "model": {
+        "default": "gpt-5.5",
+        "provider": "openai-codex",
+        "base_url": "https://chatgpt.com/backend-api/codex",
+    },
     "toolsets": ["gauss-cli"],
     "agent": {
         "max_turns": 90,
@@ -186,13 +188,6 @@ DEFAULT_CONFIG = {
     "browser": {
         "inactivity_timeout": 120,
         "record_sessions": False,  # Auto-record browser sessions as WebM videos
-    },
-
-    "cli": {
-        "handoff": {
-            "mode": "auto",
-            "launchers": {},
-        },
     },
 
     # Filesystem checkpoints — automatic snapshots before destructive file ops.

@@ -62,7 +62,7 @@ def test_nous_oauth_setup_keeps_current_model_when_syncing_disk_provider(
     assert isinstance(reloaded["model"], dict)
     assert reloaded["model"]["provider"] == "nous"
     assert reloaded["model"]["base_url"] == "https://inference.example.com/v1"
-    assert reloaded["model"]["default"] == "anthropic/claude-opus-4.6"
+    assert reloaded["model"]["default"] == "gpt-5.5"
 
 
 def test_custom_setup_clears_active_oauth_provider(tmp_path, monkeypatch):

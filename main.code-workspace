@@ -1,0 +1,47 @@
+{
+  "folders": [
+    {
+      "name": "FoM OpenGauss Proj",
+      "path": "FoM"
+    },
+    {
+      "name": "Source Material",
+      "path": "Sources"
+    }
+  ],
+  "settings": {
+    "files.associations": {
+      "lakefile.toml": "toml",
+      "lean-toolchain": "plaintext"
+    },
+    "files.exclude": {
+      "**/.DS_Store": true,
+      "**/__pycache__": true,
+      "**/.pytest_cache": true,
+      "**/.gauss/cache": true,
+      "**/.gauss/runtime": true,
+      "**/.lake": true
+    },
+    "search.exclude": {
+      "**/.venv": true,
+      "**/.gauss/cache": true,
+      "**/.gauss/runtime": true,
+      "**/__pycache__": true,
+      "**/.pytest_cache": true,
+      "**/build": true,
+      "**/.lake": true
+    },
+    "files.watcherExclude": {
+      "**/.venv/**": true,
+      "**/.lake/**": true,
+      "**/.gauss/cache/**": true,
+      "**/.gauss/runtime/**": true,
+      "**/__pycache__/**": true
+    }
+  },
+  "extensions": {
+    "recommendations": [
+      "leanprover.lean4"
+    ]
+  }
+}

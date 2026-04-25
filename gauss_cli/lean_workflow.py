@@ -16,6 +16,8 @@ from gauss_cli.lean_workflow_profiles import get_workflow_profile
 DEFAULT_NATIVE_LEAN_MODEL = "gpt-5.5"
 NATIVE_LEAN_PROVIDER = "openai-codex"
 NATIVE_LEAN_TOOLSET = "opengauss-lean"
+DEFAULT_LOCAL_LEAN_TOOLSET = NATIVE_LEAN_TOOLSET
+DEFAULT_LEAN_REASONING_EFFORT = "high"
 
 _WORKFLOW_ALIAS_MAP = {
     "/prove": ("prove", "/prove"),
@@ -146,6 +148,7 @@ def prepare_native_lean_workflow(
     *,
     cwd: str | Path | None = None,
     model: str | None = None,
+    toolset: str | None = None,
 ) -> NativeLeanWorkflowPlan:
     active_cwd = Path(cwd or os.getcwd()).expanduser().resolve()
     spec = parse_lean_workflow_command(command)
@@ -156,32 +159,39 @@ def prepare_native_lean_workflow(
         active_cwd=active_cwd,
         provider=NATIVE_LEAN_PROVIDER,
         model=model or DEFAULT_NATIVE_LEAN_MODEL,
+        toolsets=(toolset or DEFAULT_LOCAL_LEAN_TOOLSET,),
     )
 
 
-def _build_system_message(plan: NativeLeanWorkflowPlan) -> str:
+def _build_system_message(plan: NativeLeanWorkflowPlan, extra_guidance: list[str] | tuple[str, ...] | None = None) -> str:
     project = plan.project
     profile = get_workflow_profile(plan.spec.workflow_kind)
-    return "\n".join(
-        [
-            "You are the native OpenGauss Lean workflow agent.",
-            "OpenGauss owns this workflow loop; do not delegate to external CLIs, MCP, or shell launchers.",
-            f"Workflow: {plan.spec.canonical_command}",
-            f"Native workflow profile: {profile.name} - {profile.summary}",
-            f"Project root: {project.root}",
-            f"Lean root: {project.lean_root}",
-            "Use only the available OpenGauss Lean tools: file tools, AXLE tools, native Lean project tools, native LSP-style context tools, and Comparator audit tools.",
-            "Use lean_project_status first when project state is unclear.",
-            "Use lean_proof_context, lean_lsp_diagnostics, lean_lsp_goals, lean_lsp_symbols, lean_lsp_definition, and lean_lsp_references for Lean context instead of MCP.",
-            "Use lean_lake_build or lean_check_file for verification instead of invoking shell commands.",
-            "Use lean_comparator_check as the final proof-audit tool for Challenge.lean/Solution.lean tasks.",
-            "Use lean_sorry_report before claiming a theorem or module is complete.",
-            "When editing, preserve nearby project style and keep changes scoped to the requested Lean workflow.",
-            "Native profile guidance:",
-            *[f"- {item}" for item in profile.guidance],
-            "Finish with a concise status that names changed files and the strongest verification result obtained.",
-        ]
-    )
+    lines = [
+        "You are the OpenGauss Lean workflow agent.",
+        "OpenGauss owns this workflow loop; do not delegate to external CLIs, MCP, or shell launchers.",
+        f"Workflow: {plan.spec.canonical_command}",
+        f"Native workflow profile: {profile.name} - {profile.summary}",
+        f"Project root: {project.root}",
+        f"Lean root: {project.lean_root}",
+        f"Enabled toolset: {', '.join(plan.toolsets)}.",
+        "Use only the available OpenGauss Lean tools: file tools, AXLE tools, Lean project tools, LSP-style context tools, controlled project inspection, and Comparator audit tools.",
+        "Use lean_project_status first when project state is unclear.",
+        "Use lean_proof_context, lean_lsp_diagnostics, lean_lsp_goals, lean_lsp_symbols, lean_lsp_definition, and lean_lsp_references for Lean context.",
+        "Use lean_lake_build or lean_check_file for verification instead of invoking shell commands.",
+        "Use lean_comparator_check as the final proof-audit tool for Challenge.lean/Solution.lean tasks.",
+        "Use lean_sorry_report before claiming a theorem or module is complete.",
+        "Use lean_project_inspect for controlled read-only project/source inspection when needed.",
+        "When editing, preserve nearby project style and keep changes scoped to the requested Lean workflow.",
+        "Do not introduce `axiom`, `constant`, `unsafe`, theorem bypasses, private synthetic axioms, or elaborator-level axiom injection.",
+        "Comparator is the pass/fail authority for benchmark-style tasks; lake build plus zero sorries is not enough.",
+        "Native profile guidance:",
+        *[f"- {item}" for item in profile.guidance],
+        "Finish with a concise status that names changed files and the strongest verification result obtained.",
+    ]
+    lines.append("If Comparator is unavailable or failing, keep working or report the exact blocking Comparator failure; do not claim success.")
+    if extra_guidance:
+        lines.extend(["Additional run guidance:", *[str(item) for item in extra_guidance if str(item).strip()]])
+    return "\n".join(lines)
 
 
 def _build_user_message(plan: NativeLeanWorkflowPlan) -> str:
@@ -197,10 +207,14 @@ def _build_user_message(plan: NativeLeanWorkflowPlan) -> str:
 
 
 @contextmanager
-def _workflow_environment(project_root: Path):
+def _workflow_environment(project_root: Path, extra_env: Mapping[str, str] | None = None):
     previous_cwd = Path.cwd()
     previous_terminal_cwd = os.environ.get("TERMINAL_CWD")
+    previous_extra: dict[str, str | None] = {}
     os.environ["TERMINAL_CWD"] = str(project_root)
+    for key, value in (extra_env or {}).items():
+        previous_extra[key] = os.environ.get(key)
+        os.environ[key] = str(value)
     os.chdir(project_root)
     try:
         yield
@@ -210,6 +224,11 @@ def _workflow_environment(project_root: Path):
             os.environ.pop("TERMINAL_CWD", None)
         else:
             os.environ["TERMINAL_CWD"] = previous_terminal_cwd
+        for key, previous_value in previous_extra.items():
+            if previous_value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = previous_value
 
 
 def run_native_lean_workflow(
@@ -225,14 +244,17 @@ def run_native_lean_workflow(
     skip_context_files: bool = False,
     skip_memory: bool = False,
     tool_progress_callback: Any = None,
+    toolset: str | None = None,
+    extra_env: Mapping[str, str] | None = None,
+    extra_system_guidance: list[str] | tuple[str, ...] | None = None,
 ) -> NativeLeanWorkflowResult:
-    plan = prepare_native_lean_workflow(command, cwd=cwd, model=model)
+    plan = prepare_native_lean_workflow(command, cwd=cwd, model=model, toolset=toolset)
     runtime = resolve_runtime_provider(requested=NATIVE_LEAN_PROVIDER)
     resolved_model = model or DEFAULT_NATIVE_LEAN_MODEL
-
+    effective_extra_env = dict(extra_env or {})
     from run_agent import AIAgent
 
-    with _workflow_environment(plan.project.root):
+    with _workflow_environment(plan.project.root, extra_env=effective_extra_env):
         agent = AIAgent(
             model=resolved_model,
             api_key=runtime.get("api_key", ""),
@@ -240,7 +262,7 @@ def run_native_lean_workflow(
             provider=NATIVE_LEAN_PROVIDER,
             api_mode="codex_responses",
             max_iterations=max_iterations,
-            enabled_toolsets=[NATIVE_LEAN_TOOLSET],
+            enabled_toolsets=list(plan.toolsets),
             quiet_mode=quiet_mode,
             verbose_logging=False,
             platform="cli",
@@ -250,13 +272,14 @@ def run_native_lean_workflow(
             skip_memory=skip_memory,
             reasoning_config={
                 "enabled": True,
-                "effort": str(reasoning_effort or "medium").strip().lower() or "medium",
+                "effort": str(reasoning_effort or DEFAULT_LEAN_REASONING_EFFORT).strip().lower()
+                or DEFAULT_LEAN_REASONING_EFFORT,
             },
             tool_progress_callback=tool_progress_callback,
         )
         result = agent.run_conversation(
             _build_user_message(plan),
-            system_message=_build_system_message(plan),
+            system_message=_build_system_message(plan, extra_guidance=extra_system_guidance),
             task_id=agent.session_id,
             persist_user_message=plan.spec.command_text,
         )

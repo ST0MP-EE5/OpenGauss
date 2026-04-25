@@ -149,9 +149,11 @@ def show_status(args) -> None:
 
     print()
     print(color("◆ Lean Workflows", Colors.CYAN, Colors.BOLD))
-    print("  Native lane:   OpenGauss Lean runner")
-    print("  Provider:      openai-codex")
-    print("  Model:         gpt-5.5")
-    print("  Toolset:       opengauss-lean")
+    gauss_cfg = config.get("gauss", {})
+    auto_cfg = gauss_cfg.get("autoformalize", {}) if isinstance(gauss_cfg, dict) else {}
+    print("  Local lane:    OpenGauss managed lean4-skills frontend")
+    print(f"  Backend:       {auto_cfg.get('backend', 'codex')}")
+    print(f"  Handoff mode:  {auto_cfg.get('handoff_mode', 'auto')}")
+    print(f"  Auth mode:     {auto_cfg.get('auth_mode', 'auto')}")
     print("  Benchmark env: formalqualbench")
     print()

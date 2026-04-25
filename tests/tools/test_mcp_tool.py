@@ -80,6 +80,30 @@ class TestLoadMCPConfig:
             result = _load_mcp_config()
             assert result == {}
 
+    def test_lean_lsp_mcp_uses_uvx_package_arg(self, monkeypatch, tmp_path):
+        """Auto lean-lsp config uses uvx lean-lsp-mcp by default."""
+        monkeypatch.setenv("GAUSS_LEAN_LSP_MCP_PROJECT_PATH", str(tmp_path))
+        with patch("gauss_cli.config.load_config", return_value={}):
+            from tools.mcp_tool import _load_mcp_config
+
+            result = _load_mcp_config()
+
+        assert result["lean-lsp"]["command"] == "uvx"
+        assert result["lean-lsp"]["args"][:2] == ["lean-lsp-mcp", "--lean-project-path"]
+
+    def test_lean_lsp_mcp_direct_command_omits_package_arg(self, monkeypatch, tmp_path):
+        """Auto lean-lsp config does not pass lean-lsp-mcp as an argv to itself."""
+        monkeypatch.setenv("GAUSS_LEAN_LSP_MCP_PROJECT_PATH", str(tmp_path))
+        monkeypatch.setenv("GAUSS_LEAN_LSP_MCP_COMMAND", "lean-lsp-mcp")
+        with patch("gauss_cli.config.load_config", return_value={}):
+            from tools.mcp_tool import _load_mcp_config
+
+            result = _load_mcp_config()
+
+        assert result["lean-lsp"]["command"] == "lean-lsp-mcp"
+        assert result["lean-lsp"]["args"][0] == "--lean-project-path"
+        assert "lean-lsp-mcp" not in result["lean-lsp"]["args"]
+
 
 # ---------------------------------------------------------------------------
 # Schema conversion

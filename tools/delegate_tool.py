@@ -618,20 +618,7 @@ def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
 
 
 def _load_config() -> dict:
-    """Load delegation config from CLI_CONFIG or persistent config.
-
-    Checks the runtime config (cli.py CLI_CONFIG) first, then falls back
-    to the persistent config (gauss_cli/config.py load_config()) so that
-    ``delegation.model`` / ``delegation.provider`` are picked up regardless
-    of the entry point (CLI, gateway, cron).
-    """
-    try:
-        from cli import CLI_CONFIG
-        cfg = CLI_CONFIG.get("delegation", {})
-        if cfg:
-            return cfg
-    except Exception:
-        pass
+    """Load delegation config from persistent OpenGauss config."""
     try:
         from gauss_cli.config import load_config
         full = load_config()

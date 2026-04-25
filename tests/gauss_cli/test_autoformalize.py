@@ -1,4 +1,4 @@
-"""Compatibility tests for the retired managed autoformalize launcher module."""
+"""Compatibility tests for the managed autoformalize launcher module."""
 
 from __future__ import annotations
 
@@ -7,19 +7,18 @@ import pytest
 import gauss_cli.autoformalize as autoformalize
 
 
-def _config(*, backend: str = "native") -> dict:
+def _config(*, backend: str = "codex") -> dict:
     return {
         "gauss": {
             "autoformalize": {
                 "backend": backend,
-                "handoff_mode": "direct",
                 "auth_mode": "auto",
             }
         }
     }
 
 
-def test_managed_backend_surface_is_codex_only_with_native_compatibility():
+def test_managed_backend_surface_matches_upstream_with_native_compatibility():
     assert autoformalize.supported_autoformalize_backends() == ("codex",)
     assert autoformalize._resolve_backend_name(_config(backend="native"), {}) == "codex"
     assert autoformalize._resolve_backend_name(_config(backend="direct"), {}) == "codex"
@@ -33,6 +32,11 @@ def test_managed_backend_surface_is_codex_only_with_native_compatibility():
 def test_external_backend_is_no_longer_supported():
     with pytest.raises(autoformalize.AutoformalizeConfigError, match="gauss.autoformalize.backend"):
         autoformalize._resolve_backend_name(_config(backend="external"), {})
+
+
+def test_claude_backend_is_no_longer_supported():
+    with pytest.raises(autoformalize.AutoformalizeConfigError, match="gauss.autoformalize.backend"):
+        autoformalize._resolve_backend_name(_config(backend="claude"), {})
 
 
 def test_workflow_aliases_still_parse_for_legacy_callers():

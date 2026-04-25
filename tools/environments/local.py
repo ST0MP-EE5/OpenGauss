@@ -67,6 +67,7 @@ def _build_provider_env_blocklist() -> frozenset:
         "OPENAI_ORG_ID",
         "OPENAI_ORGANIZATION",
         "OPENROUTER_API_KEY",
+        "ANTHROPIC_API_KEY",
         "ANTHROPIC_BASE_URL",
         "ANTHROPIC_TOKEN",         # OAuth token (not in registry as env var)
         "CLAUDE_CODE_OAUTH_TOKEN",

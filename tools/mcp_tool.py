@@ -929,9 +929,34 @@ def _load_mcp_config() -> Dict[str, dict]:
     try:
         from gauss_cli.config import load_config
         config = load_config()
-        servers = config.get("mcp_servers")
+        if os.getenv("GAUSS_LEAN_LSP_MCP_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}:
+            servers = {}
+        else:
+            servers = config.get("mcp_servers")
         if not servers or not isinstance(servers, dict):
-            return {}
+            servers = {}
+        else:
+            servers = dict(servers)
+        lean_lsp_project = os.getenv("GAUSS_LEAN_LSP_MCP_PROJECT_PATH", "").strip()
+        if lean_lsp_project:
+            server_name = os.getenv("GAUSS_LEAN_LSP_MCP_SERVER_NAME", "lean-lsp").strip() or "lean-lsp"
+            command = os.getenv("GAUSS_LEAN_LSP_MCP_COMMAND", "uvx").strip() or "uvx"
+            args = [
+                "--lean-project-path",
+                lean_lsp_project,
+                "--repl",
+            ]
+            if os.path.basename(command) in {"uvx", "uv"}:
+                args.insert(0, "lean-lsp-mcp")
+            servers.setdefault(
+                server_name,
+                {
+                    "command": command,
+                    "args": args,
+                    "connect_timeout": 90,
+                    "timeout": 300,
+                },
+            )
         return servers
     except Exception as exc:
         logger.debug("Failed to load MCP config: %s", exc)
@@ -1563,7 +1588,8 @@ def discover_mcp_tools() -> List[str]:
     _run_on_mcp_loop(_discover_all(), timeout=120)
 
     if all_tools:
-        # Dynamically inject into all gauss-* platform toolsets
+        # Dynamically inject into platform toolsets. The OpenGauss Lean harness
+        # owns benchmark tools directly rather than inheriting arbitrary MCP.
         from toolsets import TOOLSETS
         for ts_name, ts in TOOLSETS.items():
             if ts_name.startswith("gauss-"):

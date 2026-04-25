@@ -23,12 +23,8 @@ logger = logging.getLogger(__name__)
 # =========================================================================
 
 def _get_skin():
-    """Get the active skin config, or None if not available."""
-    try:
-        from gauss_cli.skin_engine import get_active_skin
-        return get_active_skin()
-    except Exception:
-        return None
+    """Skin support was removed with the old prompt_toolkit frontend."""
+    return None
 
 
 def get_skin_faces(key: str, default: list) -> list:

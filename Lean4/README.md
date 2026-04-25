@@ -37,3 +37,17 @@ The toolset includes scoped file edits, AXLE, controlled local Lean checks/build
 - `OpenGaussLean4/NumberTheory/`: elementary divisibility lemmas
 - `OpenGaussLean4/Order/`: bound-transfer lemmas
 - `OpenGaussLean4/FoundationsOfMathematics/`: reserved area for foundations-focused work
+
+## Foundations of Mathematics exam study track
+
+The workspace now includes a focused study track for the topics listed in
+`Sources/FoundationsOfMathematics/exam3_topics.pdf`.
+
+- root import: `OpenGaussLean4.FoundationsOfMathematics.Exam3`
+- modules:
+  - `...Exam3.Functions`
+  - `...Exam3.Calculus`
+  - `...Exam3.Cardinality`
+
+Use `gauss` from the repo root for the OpenGauss frontend, then `lake build`
+from `Lean4/` to validate the project.

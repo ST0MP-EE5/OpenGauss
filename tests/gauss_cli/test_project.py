@@ -49,6 +49,16 @@ def test_discover_gauss_project_uses_nearest_parent(tmp_path: Path):
     assert discovered != outer_project
 
 
+def test_discover_gauss_project_skips_non_project_gauss_config_dirs(tmp_path: Path):
+    home = tmp_path / "Home"
+    repo = home / "Documents" / "Repo"
+    (home / ".gauss").mkdir(parents=True)
+    repo.mkdir(parents=True)
+
+    with pytest.raises(project_mod.ProjectNotFoundError, match="No active Gauss project"):
+        project_mod.discover_gauss_project(repo)
+
+
 def test_load_gauss_project_rejects_manifest_paths_outside_root(tmp_path: Path):
     root = tmp_path / "Demo"
     outside = tmp_path / "Outside"

@@ -2,6 +2,7 @@ import OpenGaussLean4.Basic
 import OpenGaussLean4.ProblemSolvingStrategies
 import OpenGaussLean4.Algebra.Identities
 import OpenGaussLean4.Calculus.FiniteDifference
+import OpenGaussLean4.FoundationsOfMathematics.Exam3
 import OpenGaussLean4.LinearAlgebra.LinearCombinations
 import OpenGaussLean4.NumberTheory.Divisibility
 import OpenGaussLean4.Order.Bounds

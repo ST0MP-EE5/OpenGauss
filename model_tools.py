@@ -107,10 +107,13 @@ def _discover_tools():
         "tools.web_tools",
         "tools.file_tools",
         "tools.browser_tool",
+        "tools.terminal_tool",
+        "tools.skills_tool",
         "tools.axle_tool",
         "tools.lean_workflow_tool",
         "tools.lean_lsp_tool",
         "tools.lean_comparator_tool",
+        "tools.lean_project_shell_tool",
     ]
     import importlib
     for mod_name in _modules:

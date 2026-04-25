@@ -19,8 +19,6 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from prompt_toolkit import print_formatted_text as _pt_print
-from prompt_toolkit.formatted_text import ANSI as _PT_ANSI
 from gauss_cli.colors import render_terminal_text, supports_ansi, supports_unicode
 
 logger = logging.getLogger(__name__)
@@ -37,39 +35,26 @@ _RST = "\033[0m"
 
 
 def cprint(text: str):
-    """Print ANSI-colored text through prompt_toolkit's renderer."""
+    """Print ANSI-colored text for non-interactive OpenGauss commands."""
     ansi_enabled = supports_ansi()
     rendered = render_terminal_text(
         text,
         allow_ansi=ansi_enabled,
         allow_unicode=supports_unicode(),
     )
-    if ansi_enabled:
-        _pt_print(_PT_ANSI(rendered))
-    else:
-        _pt_print(rendered)
+    print(rendered)
 
-
-# =========================================================================
-# Skin-aware color helpers
-# =========================================================================
 
 def _skin_color(key: str, fallback: str) -> str:
-    """Get a color from the active skin, or return fallback."""
-    try:
-        from gauss_cli.skin_engine import get_active_skin
-        return get_active_skin().get_color(key, fallback)
-    except Exception:
-        return fallback
+    """Return the fixed OpenGauss CLI color for retained non-interactive output."""
+    del key
+    return fallback
 
 
 def _skin_branding(key: str, fallback: str) -> str:
-    """Get a branding string from the active skin, or return fallback."""
-    try:
-        from gauss_cli.skin_engine import get_active_skin
-        return get_active_skin().get_branding(key, fallback)
-    except Exception:
-        return fallback
+    """Return fixed OpenGauss branding for retained non-interactive output."""
+    del key
+    return fallback
 
 
 # =========================================================================
@@ -396,14 +381,7 @@ def build_welcome_banner(console: Console, model: str, cwd: str,
     text = _skin_color("banner_text", "#FFF8DC")
     session_color = _skin_color("session_border", "#8B8682")
 
-    # Use skin's custom caduceus art if provided
-    try:
-        from gauss_cli.skin_engine import get_active_skin
-        _bskin = get_active_skin()
-    except Exception:
-        _bskin = None
-
-    layout_mode, _logo, _hero = _select_banner_art(term_width, _bskin, unicode_enabled=unicode_enabled)
+    layout_mode, _logo, _hero = _select_banner_art(term_width, None, unicode_enabled=unicode_enabled)
 
     layout_table = Table.grid(padding=(0, 1 if layout_mode == "stack" else 2))
     if layout_mode == "split":

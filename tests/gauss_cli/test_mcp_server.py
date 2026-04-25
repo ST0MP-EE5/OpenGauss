@@ -11,6 +11,7 @@ from gauss_cli import mcp_server
 from gauss_cli.project import discover_gauss_project
 from gauss_state import SessionDB
 from swarm_manager import SwarmManager
+from toolsets import resolve_toolset
 
 
 def _seed_lean_project(root):
@@ -111,7 +112,7 @@ def test_axle_check_uses_project_environment_from_cwd(monkeypatch, tmp_path):
     assert captured["content"] == "def answer := 42"
 
 
-def test_build_server_registers_axle_tools(monkeypatch):
+def test_build_server_registers_full_opengauss_lean_harness_surface(monkeypatch):
     registered = []
 
     class DummyServer:
@@ -131,6 +132,13 @@ def test_build_server_registers_axle_tools(monkeypatch):
 
     mcp_server.build_server()
 
+    for direct_name in resolve_toolset("opengauss-lean"):
+        assert mcp_server.CODEX_MCP_TOOL_ALIASES[direct_name] in registered
+
+    assert "gauss_read_file" in registered
+    assert "gauss_write_file" in registered
+    assert "gauss_patch" in registered
+    assert "gauss_search_files" in registered
     assert "axle_environments" in registered
     assert "axle_check" in registered
     assert "axle_verify_proof" in registered
@@ -139,11 +147,112 @@ def test_build_server_registers_axle_tools(monkeypatch):
     assert "axle_simplify_theorems" in registered
     assert "axle_normalize" in registered
     assert "axle_rename" in registered
+    assert "gauss_lean_project_status" in registered
+    assert "gauss_lean_sorry_report" in registered
+    assert "gauss_lean_lake_build" in registered
+    assert "gauss_lean_check_file" in registered
     assert "gauss_lean_lsp_diagnostics" in registered
     assert "gauss_lean_lsp_goals" in registered
     assert "gauss_lean_lsp_references" in registered
     assert "gauss_lean_proof_context" in registered
     assert "gauss_lean_comparator_check" in registered
+    assert "gauss_lean_project_inspect" in registered
+
+
+def test_mcp_file_tools_are_native_harness_adapters(monkeypatch, tmp_path):
+    _seed_lean_project(tmp_path)
+    mcp_server.gauss_project_init(str(tmp_path), name="Demo Project")
+    captured = {}
+
+    def fake_read_file_tool(**kwargs):
+        captured["read"] = kwargs
+        return '{"content":"demo"}'
+
+    def fake_search_tool(**kwargs):
+        captured["search"] = kwargs
+        return '{"matches":[]}'
+
+    def fake_write_file_tool(**kwargs):
+        captured["write"] = kwargs
+        return '{"path":"Demo.lean"}'
+
+    def fake_patch_tool(**kwargs):
+        captured["patch"] = kwargs
+        return '{"diff":"---"}'
+
+    monkeypatch.setattr(mcp_server, "read_file_tool", fake_read_file_tool)
+    monkeypatch.setattr(mcp_server, "search_tool", fake_search_tool)
+    monkeypatch.setattr(mcp_server, "write_file_tool", fake_write_file_tool)
+    monkeypatch.setattr(mcp_server, "patch_tool", fake_patch_tool)
+
+    read_result = mcp_server.gauss_read_file("Demo.lean", cwd=str(tmp_path), offset=2, limit=3)
+    search_result = mcp_server.gauss_search_files("theorem", cwd=str(tmp_path), file_glob="*.lean")
+    write_result = mcp_server.gauss_write_file("Demo.lean", "def x := 1", cwd=str(tmp_path))
+    patch_result = mcp_server.gauss_patch(
+        cwd=str(tmp_path),
+        path="Demo.lean",
+        old_string="def x := 1",
+        new_string="def x := 2",
+    )
+
+    assert read_result["mcp_adapter"] is True
+    assert search_result["mcp_adapter"] is True
+    assert write_result["mcp_adapter"] is True
+    assert patch_result["mcp_adapter"] is True
+    assert captured["read"]["path"] == "Demo.lean"
+    assert captured["read"]["offset"] == 2
+    assert captured["read"]["limit"] == 3
+    assert captured["search"]["pattern"] == "theorem"
+    assert captured["search"]["file_glob"] == "*.lean"
+    assert captured["write"]["content"] == "def x := 1"
+    assert captured["patch"]["new_string"] == "def x := 2"
+
+
+def test_mcp_lean_local_tools_are_native_adapters(monkeypatch):
+    monkeypatch.setattr(
+        mcp_server,
+        "local_lean_project_status",
+        lambda **kwargs: {"project": {"name": "Demo"}, "received": kwargs},
+    )
+    monkeypatch.setattr(
+        mcp_server,
+        "local_lean_sorry_report",
+        lambda **kwargs: {"sorry_count": 0, "received": kwargs},
+    )
+    monkeypatch.setattr(
+        mcp_server,
+        "local_lake_build",
+        lambda **kwargs: {"success": True, "received": kwargs},
+    )
+    monkeypatch.setattr(
+        mcp_server,
+        "local_lean_check_file",
+        lambda **kwargs: {"success": True, "received": kwargs},
+    )
+    monkeypatch.setattr(
+        mcp_server,
+        "_lean_project_inspect_tool",
+        lambda **kwargs: '{"success":true,"stdout":"ok"}',
+    )
+
+    status = mcp_server.gauss_lean_project_status(cwd="/tmp/project")
+    sorry = mcp_server.gauss_lean_sorry_report(cwd="/tmp/project", path="Demo.lean")
+    build = mcp_server.gauss_lean_lake_build(cwd="/tmp/project", targets=["Demo"])
+    check = mcp_server.gauss_lean_check_file("Demo.lean", cwd="/tmp/project")
+    inspect = mcp_server.gauss_lean_project_inspect("rg theorem", cwd="/tmp/project")
+
+    assert status["operation"] == "lean_project_status"
+    assert sorry["operation"] == "lean_sorry_report"
+    assert build["operation"] == "lean_lake_build"
+    assert check["operation"] == "lean_check_file"
+    assert inspect["operation"] == "lean_project_inspect"
+    assert status["mcp_adapter"] is True
+    assert sorry["mcp_adapter"] is True
+    assert build["mcp_adapter"] is True
+    assert check["mcp_adapter"] is True
+    assert inspect["mcp_adapter"] is True
+    assert build["received"]["targets"] == ["Demo"]
+    assert check["received"]["path"] == "Demo.lean"
 
 
 def test_mcp_lsp_and_comparator_tools_are_native_adapters(monkeypatch):

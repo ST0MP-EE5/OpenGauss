@@ -74,6 +74,18 @@ TOOLSETS = {
         "includes": []
     },
 
+    "terminal": {
+        "description": "Generic terminal execution tools",
+        "tools": ["terminal"],
+        "includes": []
+    },
+
+    "skills": {
+        "description": "Skill discovery and skill document tools",
+        "tools": ["skills_list", "skill_view"],
+        "includes": []
+    },
+
     "axle": {
         "description": "AXLE Lean verification and metaprogramming tools",
         "tools": [
@@ -122,10 +134,18 @@ TOOLSETS = {
         "includes": []
     },
 
+    "lean-project-inspect": {
+        "description": "Controlled read-only project inspection for OpenGauss Lean workflows",
+        "tools": [
+            "lean_project_inspect",
+        ],
+        "includes": []
+    },
+
     "opengauss-lean": {
-        "description": "Native OpenGauss Lean workflow tools without generic shell access",
+        "description": "Canonical OpenGauss Lean harness tools without generic shell access",
         "tools": [],
-        "includes": ["file", "axle", "lean-local", "lean-lsp", "lean-comparator"]
+        "includes": ["file", "axle", "lean-local", "lean-lsp", "lean-comparator", "lean-project-inspect"]
     },
 
     "autoformalize": {

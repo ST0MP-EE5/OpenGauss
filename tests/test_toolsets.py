@@ -48,7 +48,12 @@ class TestResolveToolset:
         assert "lean_lsp_references" in tools
         assert "lean_proof_context" in tools
         assert "lean_comparator_check" in tools
+        assert "lean_project_inspect" in tools
         assert "terminal" not in tools
+
+    def test_removed_lean_lanes_are_not_public_toolsets(self):
+        assert resolve_toolset("opengauss-parity-lean") == []
+        assert resolve_toolset("opengauss-reference-lean") == []
 
     def test_composite_toolset(self):
         tools = resolve_toolset("autoformalize")

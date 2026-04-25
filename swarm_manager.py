@@ -1,15 +1,4 @@
-"""Agent swarm manager for background autoformalization tasks.
-
-Tracks spawned autoformalization agents, manages their lifecycle, and
-renders Rich table status views for the ``/swarm`` slash command.
-
-Background agents run Claude Code in ``-p`` (print) mode with
-``--output-format stream-json`` so the swarm manager can parse live
-progress events and update each task's status without blocking the TUI.
-
-Interactive sessions run behind a PTY so users can attach/detach via
-``/swarm attach <id>`` without losing the agent's running state.
-"""
+"""OpenGauss workflow task registry."""
 
 from __future__ import annotations
 
@@ -33,27 +22,22 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from rich.table import Table
 
-from gauss_cli.skin_engine import get_active_skin
-
 logger = logging.getLogger(__name__)
 
 _RECENT_OUTPUT_LIMIT = 256 * 1024
+_COLORS = {
+    "ui_ok": "#8B9B7A",
+    "ui_accent": "#C8C0B0",
+    "ui_error": "#B07070",
+    "banner_border": "#5B6B4F",
+    "banner_title": "#C8C0B0",
+    "banner_text": "#C8C0B0",
+    "banner_dim": "#6B6B60",
+}
 
 
-def _is_effective_root() -> bool:
-    geteuid = getattr(os, "geteuid", None)
-    if callable(geteuid):
-        try:
-            return geteuid() == 0
-        except OSError:
-            pass
-    getuid = getattr(os, "getuid", None)
-    if callable(getuid):
-        try:
-            return getuid() == 0
-        except OSError:
-            pass
-    return False
+def _color(name: str) -> str:
+    return _COLORS.get(name, "#C8C0B0")
 
 
 @dataclass
@@ -97,7 +81,7 @@ def _format_elapsed(seconds: float) -> str:
 
 
 def _parse_stream_event(task: SwarmTask, line: str) -> None:
-    """Parse a single line of Claude Code ``stream-json`` output and update *task*."""
+    """Parse a single line of JSON tool output and update *task*."""
     try:
         event = json.loads(line)
     except (json.JSONDecodeError, TypeError):
@@ -140,78 +124,6 @@ def _parse_stream_event(task: SwarmTask, line: str) -> None:
             task.lean_status = "verified"
 
 
-def _ensure_workspace_trusted(cwd: str) -> None:
-    """Pre-trust *cwd* in ``~/.claude.json`` so CC skips the trust dialog."""
-    claude_json = os.path.expanduser("~/.claude.json")
-    try:
-        with open(claude_json, "r") as f:
-            data = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        data = {}
-
-    projects = data.setdefault("projects", {})
-    resolved = os.path.realpath(cwd)
-
-    entry = projects.get(resolved, {})
-    if entry.get("hasTrustDialogAccepted") and entry.get("hasTrustDialogHooksAccepted"):
-        return
-
-    entry.setdefault("allowedTools", [])
-    entry["hasTrustDialogAccepted"] = True
-    entry["hasTrustDialogHooksAccepted"] = True
-    projects[resolved] = entry
-    data["projects"] = projects
-
-    try:
-        with open(claude_json, "w") as f:
-            json.dump(data, f, indent=2)
-        logger.debug("Pre-trusted workspace %s in ~/.claude.json", resolved)
-    except OSError as exc:
-        logger.warning("Could not write ~/.claude.json: %s", exc)
-
-
-def _normalize_claude_session_launch(
-    argv: Sequence[str],
-    env: Dict[str, str],
-    cwd: str = "",
-) -> tuple[List[str], Dict[str, str]]:
-    """Force Claude Code child sessions into bypass/yolo mode."""
-    normalized_argv = list(argv)
-    normalized_env = dict(env)
-    if not normalized_argv:
-        return normalized_argv, normalized_env
-
-    executable = os.path.basename(str(normalized_argv[0]))
-    if executable != "claude":
-        return normalized_argv, normalized_env
-
-    if cwd:
-        _ensure_workspace_trusted(cwd)
-
-    stripped_argv: List[str] = [normalized_argv[0]]
-    i = 1
-    while i < len(normalized_argv):
-        arg = str(normalized_argv[i])
-        if arg == "--dangerously-skip-permissions":
-            i += 1
-            continue
-        if arg == "--permission-mode":
-            i += 2
-            continue
-        if arg.startswith("--permission-mode="):
-            i += 1
-            continue
-        stripped_argv.append(normalized_argv[i])
-        i += 1
-
-    if _is_effective_root():
-        stripped_argv[1:1] = ["--permission-mode", "bypassPermissions"]
-    else:
-        stripped_argv.insert(1, "--dangerously-skip-permissions")
-    normalized_env["GAUSS_YOLO_MODE"] = "1"
-    return stripped_argv, normalized_env
-
-
 def _remember_recent_output(task: SwarmTask, chunk: bytes) -> None:
     """Keep a rolling raw-output buffer so attaches can replay the current screen."""
     if not chunk:
@@ -230,84 +142,13 @@ def _replay_recent_output(task: SwarmTask, stdout_fd: int) -> None:
     os.write(stdout_fd, bytes(task._recent_output))
 
 
-def _run_claude_code_background(
+def _run_interactive_process(
     task: SwarmTask,
     argv: Sequence[str],
     cwd: str,
     env: Dict[str, str],
 ) -> None:
-    """Run a Claude Code subprocess in print mode and stream events to *task*.
-
-    This is the target function for daemon threads spawned by
-    :meth:`SwarmManager.spawn_claude`.
-    """
-    task.status = "running"
-    task.start_time = time.time()
-    task.lean_status = "starting"
-    task.progress = "Launching Claude Code..."
-
-    try:
-        proc = subprocess.Popen(
-            list(argv),
-            cwd=cwd,
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            stdin=subprocess.DEVNULL,
-            text=True,
-            shell=False,
-        )
-        task.process = proc
-        task.progress = "Claude Code running"
-
-        for line in proc.stdout:
-            line = line.rstrip("\n")
-            if not line:
-                continue
-            _parse_stream_event(task, line)
-            if task.status == "cancelled":
-                proc.terminate()
-                break
-
-        proc.wait()
-
-        if task.status == "cancelled":
-            task.progress = "Cancelled"
-        elif proc.returncode == 0:
-            if task.status == "running":
-                task.status = "complete"
-            if not task.result:
-                task.progress = "Session ended successfully"
-        else:
-            stderr_tail = ""
-            if proc.stderr:
-                stderr_tail = proc.stderr.read()[-300:] if proc.stderr.readable() else ""
-            task.status = "failed"
-            task.error = f"exit {proc.returncode}" + (f": {stderr_tail}" if stderr_tail else "")
-            task.progress = "Claude Code exited with error"
-
-    except FileNotFoundError:
-        task.status = "failed"
-        task.error = "claude CLI not found"
-        task.progress = "Launch failed"
-    except Exception as exc:
-        task.status = "failed"
-        task.error = str(exc)[:300]
-        task.progress = "Unexpected error"
-    finally:
-        task.process = None
-        if task.end_time is None:
-            task.end_time = time.time()
-
-
-
-def _run_claude_code_interactive(
-    task: SwarmTask,
-    argv: Sequence[str],
-    cwd: str,
-    env: Dict[str, str],
-) -> None:
-    """Run Claude Code interactively behind a PTY.
+    """Run a subprocess interactively behind a PTY.
 
     The background thread reads from the PTY master only while the user
     is **not** attached.  When ``task._attached`` is set, this loop
@@ -317,7 +158,7 @@ def _run_claude_code_interactive(
     task.status = "running"
     task.start_time = time.time()
     task.lean_status = "starting"
-    task.progress = "Launching Claude Code..."
+    task.progress = "Launching process..."
     task._output_lines = []
     task._recent_output = bytearray()
 
@@ -352,7 +193,7 @@ def _run_claude_code_interactive(
 
         task.process = proc
         task.pty_master_fd = master_fd
-        task.progress = "Claude Code running"
+        task.progress = "Process running"
 
         buf = b""
         while True:
@@ -411,11 +252,11 @@ def _run_claude_code_interactive(
         else:
             task.status = "failed"
             task.error = f"exit {proc.returncode}"
-            task.progress = "Claude Code exited with error"
+            task.progress = "Process exited with error"
 
     except FileNotFoundError:
         task.status = "failed"
-        task.error = "claude CLI not found"
+        task.error = "process executable not found"
         task.progress = "Launch failed"
     except Exception as exc:
         task.status = "failed"
@@ -492,7 +333,7 @@ def attach_to_task(task: SwarmTask) -> int:
 
     While attached, **this function is the sole reader/writer** on the
     PTY master fd.  The background thread in
-    :func:`_run_claude_code_interactive` yields the fd when
+    :func:`_run_interactive_process` yields the fd when
     ``task._attached`` is ``True``.
 
     Uses the same status-bar technique as tmux: ANSI scroll region
@@ -733,63 +574,6 @@ class SwarmManager:
 
         return task
 
-    def spawn_claude(
-        self,
-        theorem: str,
-        description: str,
-        *,
-        argv: Sequence[str],
-        cwd: str,
-        env: Dict[str, str],
-        workflow_kind: str = "",
-        workflow_command: str = "",
-        project_name: str = "",
-        project_root: str = "",
-        backend_name: str = "",
-    ) -> SwarmTask:
-        """Spawn a background Claude Code process tracked as a swarm task.
-
-        The process runs in ``-p --output-format stream-json`` mode so we
-        can parse live events and update the task's progress without
-        blocking the TUI.
-        """
-        with self._lock:
-            self._counter += 1
-            task_id = f"af-{self._counter:03d}"
-            task = SwarmTask(
-                task_id=task_id,
-                description=description,
-                theorem=theorem,
-                workflow_kind=workflow_kind,
-                workflow_command=workflow_command,
-                project_name=project_name,
-                project_root=project_root,
-                working_dir=cwd,
-                backend_name=backend_name,
-            )
-            self.tasks[task_id] = task
-
-        session_id = f"af_{uuid.uuid4().hex[:8]}"
-        task.session_id = session_id
-        argv, env = _normalize_claude_session_launch(argv, env, cwd=cwd)
-
-        def _target() -> None:
-            _run_claude_code_background(task, argv, cwd, env)
-            if self._on_complete:
-                try:
-                    self._on_complete(task)
-                except Exception:
-                    pass
-
-        thread = threading.Thread(
-            target=_target,
-            daemon=True,
-            name=f"swarm-{task_id}",
-        )
-        task.thread = thread
-        thread.start()
-        return task
-
     def spawn_interactive(
         self,
         theorem: str,
@@ -804,13 +588,7 @@ class SwarmManager:
         project_root: str = "",
         backend_name: str = "",
     ) -> SwarmTask:
-        """Spawn an interactive Claude Code session behind a PTY.
-
-        Unlike :meth:`spawn_claude`, this launches CC in full interactive
-        mode (no ``-p``).  The user can later attach via
-        ``/swarm attach <id>`` to interact live, and detach with Ctrl-].
-        While detached the session continues running in the background.
-        """
+        """Spawn an interactive process behind a PTY."""
         with self._lock:
             self._counter += 1
             task_id = f"af-{self._counter:03d}"
@@ -829,10 +607,8 @@ class SwarmManager:
 
         session_id = f"af_{uuid.uuid4().hex[:8]}"
         task.session_id = session_id
-        argv, env = _normalize_claude_session_launch(argv, env, cwd=cwd)
-
         def _target() -> None:
-            _run_claude_code_interactive(task, argv, cwd, env)
+            _run_interactive_process(task, argv, cwd, env)
             if self._on_complete:
                 try:
                     self._on_complete(task)
@@ -908,11 +684,10 @@ class SwarmManager:
     @staticmethod
     def _status_indicator(status: str) -> str:
         """Return a styled status token using the Math, Inc. palette."""
-        skin = get_active_skin()
-        ok = skin.get_color("ui_ok", "#8B9B7A")
-        accent = skin.get_color("ui_accent", "#C8C0B0")
-        dim = skin.get_color("banner_dim", "#6B6B60")
-        err = skin.get_color("ui_error", "#B07070")
+        ok = _color("ui_ok")
+        accent = _color("ui_accent")
+        dim = _color("banner_dim")
+        err = _color("ui_error")
 
         mapping = {
             "complete": f"[{ok}]● done[/]",
@@ -925,11 +700,10 @@ class SwarmManager:
 
     def render_table(self) -> Table:
         """Build a Rich Table summarising all swarm tasks."""
-        skin = get_active_skin()
-        border = skin.get_color("banner_border", "#5B6B4F")
-        title_color = skin.get_color("banner_title", "#C8C0B0")
-        text_color = skin.get_color("banner_text", "#C8C0B0")
-        dim = skin.get_color("banner_dim", "#6B6B60")
+        border = _color("banner_border")
+        title_color = _color("banner_title")
+        text_color = _color("banner_text")
+        dim = _color("banner_dim")
 
         table = Table(
             title=f"[bold {title_color}]Gauss Workflow Swarm[/]",
@@ -981,11 +755,10 @@ class SwarmManager:
         if task is None:
             return None
 
-        skin = get_active_skin()
-        border = skin.get_color("banner_border", "#5B6B4F")
-        title_color = skin.get_color("banner_title", "#C8C0B0")
-        text_color = skin.get_color("banner_text", "#C8C0B0")
-        dim = skin.get_color("banner_dim", "#6B6B60")
+        border = _color("banner_border")
+        title_color = _color("banner_title")
+        text_color = _color("banner_text")
+        dim = _color("banner_dim")
 
         table = Table(
             title=f"[bold {title_color}]Task {task.task_id}[/]",
@@ -1027,12 +800,12 @@ class SwarmManager:
         if task.session_id:
             table.add_row("Session", task.session_id)
         if task.pty_master_fd is not None and task.status == "running":
-            ok = skin.get_color("ui_ok", "#8B9B7A")
+            ok = _color("ui_ok")
             table.add_row("Attach", f"[{ok}]/swarm attach {task.task_id}[/]  (Ctrl-] to detach)")
         if task.result:
             table.add_row("Result", task.result)
         if task.error:
-            err_color = skin.get_color("ui_error", "#B07070")
+            err_color = _color("ui_error")
             table.add_row("Error", f"[{err_color}]{task.error}[/]")
 
         return table
@@ -1042,11 +815,10 @@ class SwarmManager:
         c = self.counts()
         if not c:
             return None
-        skin = get_active_skin()
-        ok = skin.get_color("ui_ok", "#8B9B7A")
-        accent = skin.get_color("ui_accent", "#C8C0B0")
-        dim = skin.get_color("banner_dim", "#6B6B60")
-        err = skin.get_color("ui_error", "#B07070")
+        ok = _color("ui_ok")
+        accent = _color("ui_accent")
+        dim = _color("banner_dim")
+        err = _color("ui_error")
 
         parts: List[str] = []
         running = c.get("running", 0)

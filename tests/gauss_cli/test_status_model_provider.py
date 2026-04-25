@@ -31,18 +31,18 @@ def test_show_status_displays_configured_dict_model_and_provider_label(monkeypat
     monkeypatch.setattr(
         status_mod,
         "load_config",
-        lambda: {"model": {"default": "anthropic/claude-sonnet-4", "provider": "anthropic"}},
+        lambda: {"model": {"default": "gpt-5.5", "provider": "openai-codex"}},
         raising=False,
     )
-    monkeypatch.setattr(status_mod, "resolve_requested_provider", lambda requested=None: "anthropic", raising=False)
-    monkeypatch.setattr(status_mod, "resolve_provider", lambda requested=None, **kwargs: "anthropic", raising=False)
-    monkeypatch.setattr(status_mod, "provider_label", lambda provider: "Anthropic", raising=False)
+    monkeypatch.setattr(status_mod, "resolve_requested_provider", lambda requested=None: "openai-codex", raising=False)
+    monkeypatch.setattr(status_mod, "resolve_provider", lambda requested=None, **kwargs: "openai-codex", raising=False)
+    monkeypatch.setattr(status_mod, "provider_label", lambda provider: "OpenAI Codex", raising=False)
 
     status_mod.show_status(SimpleNamespace(all=False, deep=False))
 
     out = capsys.readouterr().out
-    assert "Model:        anthropic/claude-sonnet-4" in out
-    assert "Provider:     Anthropic" in out
+    assert "Model:        gpt-5.5" in out
+    assert "Provider:     OpenAI Codex" in out
 
 
 def test_show_status_displays_legacy_string_model_and_custom_endpoint(monkeypatch, capsys, tmp_path):
