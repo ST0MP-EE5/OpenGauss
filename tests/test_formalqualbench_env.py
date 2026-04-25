@@ -361,3 +361,9 @@ def test_run_checked_with_stagnation_allows_progress_updates(tmp_path: Path):
     assert result.returncode == 0
     assert result.timed_out is False
     assert result.idle_timed_out is False
+
+
+def test_decode_process_text_handles_timeout_bytes():
+    assert fq._decode_process_text(b"lake output\n") == "lake output\n"
+    assert fq._decode_process_text("already text") == "already text"
+    assert fq._decode_process_text(None) == ""

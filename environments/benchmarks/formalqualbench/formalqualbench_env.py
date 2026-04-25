@@ -96,6 +96,14 @@ class ProcessResult:
     error: str | None = None
 
 
+def _decode_process_text(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
 def _parse_task_filter(value: Any) -> tuple[str, ...]:
     if value is None:
         return DEFAULT_TASKS
@@ -267,8 +275,8 @@ def _run_checked(
     except subprocess.TimeoutExpired as exc:
         return ProcessResult(
             returncode=None,
-            stdout=exc.stdout or "",
-            stderr=exc.stderr or "",
+            stdout=_decode_process_text(exc.stdout),
+            stderr=_decode_process_text(exc.stderr),
             duration_seconds=round(time.time() - start, 3),
             timed_out=True,
             error=f"Timed out after {timeout_seconds}s",
@@ -345,8 +353,8 @@ def _run_checked_with_stagnation(
                     stdout, stderr = process.communicate()
                     return ProcessResult(
                         returncode=None,
-                        stdout=stdout or "",
-                        stderr=stderr or "",
+                        stdout=_decode_process_text(stdout),
+                        stderr=_decode_process_text(stderr),
                         duration_seconds=round(time.time() - start, 3),
                         timed_out=True,
                         error=f"Timed out after {timeout_seconds}s",
@@ -357,8 +365,8 @@ def _run_checked_with_stagnation(
                 )
                 return ProcessResult(
                     returncode=process.returncode,
-                    stdout=stdout or "",
-                    stderr=stderr or "",
+                    stdout=_decode_process_text(stdout),
+                    stderr=_decode_process_text(stderr),
                     duration_seconds=round(time.time() - start, 3),
                 )
             except subprocess.TimeoutExpired:
@@ -376,8 +384,8 @@ def _run_checked_with_stagnation(
                     stdout, stderr = process.communicate()
                     return ProcessResult(
                         returncode=None,
-                        stdout=stdout or "",
-                        stderr=stderr or "",
+                        stdout=_decode_process_text(stdout),
+                        stderr=_decode_process_text(stderr),
                         duration_seconds=round(now - start, 3),
                         timed_out=True,
                         idle_timed_out=True,
