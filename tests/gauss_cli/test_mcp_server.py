@@ -158,6 +158,7 @@ def test_build_server_registers_full_opengauss_lean_harness_surface(monkeypatch)
     assert "gauss_lean_comparator_check" in registered
     assert "gauss_lean_project_inspect" in registered
     assert "gauss_problem_solving_methodology" in registered
+    assert "gauss_problem_probe" in registered
 
 
 def test_mcp_file_tools_are_native_harness_adapters(monkeypatch, tmp_path):
@@ -294,6 +295,7 @@ def test_problem_solving_methodology_reports_project_module(tmp_path):
         cwd=str(tmp_path),
         topic="functions",
         problem_kind="show/evaluate",
+        mode="hypothesis_audit",
     )
 
     assert result["success"] is True
@@ -302,10 +304,57 @@ def test_problem_solving_methodology_reports_project_module(tmp_path):
     assert result["enabled"] is True
     assert result["methodology_module"] == str(module)
     assert result["topic"] == "functions"
+    assert result["mode"] == "hypothesis_audit"
+    assert "toy_models" in result["available_modes"]
+    assert "counterexample_probe" in result["available_modes"]
+    assert "assumption supports the proof" in result["selected_mode"]["purpose"]
     assert result["topic_moves"]
     assert any(source["author"] == "George Polya" for source in result["source_basis"])
     assert any(source["author"] == "Terence Tao" for source in result["source_basis"])
     assert any("245A" in source["title"] for source in result["source_basis"])
+
+
+def test_problem_probe_returns_actionable_mode_plan(tmp_path):
+    _seed_lean_project(tmp_path)
+    mcp_server.gauss_project_init(str(tmp_path), name="Demo")
+    module = tmp_path / "OpenGaussLean4" / "ProblemSolvingMethodology.lean"
+    module.parent.mkdir()
+    module.write_text("namespace OpenGaussLean4\nend OpenGaussLean4\n", encoding="utf-8")
+
+    result = mcp_server.gauss_problem_probe(
+        statement="theorem demo : True := by trivial",
+        cwd=str(tmp_path),
+        topic="analysis",
+        problem_kind="prove",
+        mode="counterexamples",
+    )
+
+    assert result["success"] is True
+    assert result["operation"] == "problem_probe"
+    assert result["mcp_adapter"] is True
+    assert result["enabled"] is True
+    assert result["mode"] == "counterexample_probe"
+    assert result["statement"] == "theorem demo : True := by trivial"
+    assert result["topic_moves"] == ["use epsilon-room", "approximate by simple objects", "track exceptional sets"]
+    assert any("failed counterexample" in step for step in result["probe_plan"])
+    assert "gauss_lean_project_status" in result["lean_tool_sequence"]
+    assert "boundary table" in result["deliverable"]
+
+
+def test_problem_probe_attempt_review_records_attempt(tmp_path):
+    _seed_lean_project(tmp_path)
+    mcp_server.gauss_project_init(str(tmp_path), name="Demo")
+
+    result = mcp_server.gauss_problem_probe(
+        cwd=str(tmp_path),
+        mode="attempt_review",
+        attempt="rw [foo] failed: unknown theorem",
+    )
+
+    assert result["mode"] == "attempt_review"
+    assert result["attempt_supplied"] is True
+    assert any("first real failure" in step for step in result["probe_plan"])
+    assert "failure classification" in result["deliverable"]
 
 
 def test_gauss_autoformalize_prepare_returns_direct_native_payload(tmp_path):

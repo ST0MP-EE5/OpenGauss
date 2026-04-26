@@ -86,6 +86,7 @@ def test_prepare_codex_frontend_injects_problem_solving_methodology(monkeypatch,
     assert 'GAUSS_PROBLEM_SOLVING_METHODOLOGY = "1"' in config_text
     assert plan.child_env["GAUSS_PROBLEM_SOLVING_METHODOLOGY"] == "1"
     assert "gauss_problem_solving_methodology" in instructions
+    assert "gauss_problem_probe" in instructions
     assert "Problem-solving methodology module detected" in instructions
 
 
@@ -226,6 +227,7 @@ def test_launch_codex_frontend_prints_visible_opengauss_tools(monkeypatch, tmp_p
     out = capsys.readouterr().out
     assert "OpenGauss MCP server: opengauss" in out
     assert "Methodology tool: opengauss/gauss_problem_solving_methodology" in out
+    assert "Problem probe tool: opengauss/gauss_problem_probe" in out
     assert "opengauss/gauss_lean_project_status" in out
 
 

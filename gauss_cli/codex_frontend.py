@@ -230,6 +230,7 @@ def _write_codex_instructions(
         "- The `opengauss` MCP server mirrors the canonical `opengauss-lean` harness surface for interactive use.",
         "- The Lean4 workflow skill is staged into this Codex profile when available; use it as the standing proof-engineering playbook.",
         "- Use `gauss_problem_solving_methodology` for mathematical learning/proof tasks when the next method or proof shape is unclear.",
+        "- Use `gauss_problem_probe` for toy models, counterexample probes, hypothesis audits, parameter/epsilon plans, proof strategy selection, failed-attempt review, and look-back extraction.",
         "- Use `gauss_lean_project_status` before changing proofs when project state is unclear.",
         "- Use `gauss_read_file`, `gauss_search_files`, `gauss_write_file`, and `gauss_patch` for project file work.",
         "- Use `gauss_lean_lsp_diagnostics`, `gauss_lean_lsp_goals`, `gauss_lean_lsp_hover`, `gauss_lean_lsp_definition`, `gauss_lean_lsp_references`, and `gauss_lean_lsp_symbols` for Lean context.",
@@ -424,6 +425,7 @@ def launch_codex_frontend(
         print(f"Codex model: {plan.model} · reasoning: {plan.reasoning_effort}")
         print("OpenGauss MCP server: opengauss")
         print("Methodology tool: opengauss/gauss_problem_solving_methodology")
+        print("Problem probe tool: opengauss/gauss_problem_probe")
         print("Lean tools: opengauss/gauss_lean_project_status, opengauss/gauss_lean_check_file, opengauss/gauss_lean_lake_build")
         print()
     return subprocess.run(

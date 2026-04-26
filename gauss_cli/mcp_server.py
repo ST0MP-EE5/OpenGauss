@@ -39,7 +39,7 @@ from gauss_cli.lean_workflow import (
     prepare_native_lean_workflow,
     run_native_lean_workflow,
 )
-from gauss_cli.problem_solving_methodology import methodology_for_project
+from gauss_cli.problem_solving_methodology import methodology_for_project, problem_probe_for_project
 from gauss_cli.project import (
     GaussProject,
     ProjectCommandError,
@@ -102,6 +102,7 @@ CODEX_MCP_TOOL_ALIASES: dict[str, str] = {
     "lean_comparator_check": "gauss_lean_comparator_check",
     "lean_project_inspect": "gauss_lean_project_inspect",
     "problem_solving_methodology": "gauss_problem_solving_methodology",
+    "problem_probe": "gauss_problem_probe",
 }
 
 for _tool_name in resolve_toolset(NATIVE_LEAN_TOOLSET):
@@ -1020,13 +1021,38 @@ def gauss_problem_solving_methodology(
     cwd: str | None = None,
     topic: str | None = None,
     problem_kind: str | None = None,
+    mode: str | None = None,
 ) -> dict[str, Any]:
     """Return project-native Pólya/Tao methodology guidance for Lean mathematical work."""
     return {
         "provider": "local",
         "operation": "problem_solving_methodology",
         "mcp_adapter": True,
-        **methodology_for_project(cwd=cwd, topic=topic, problem_kind=problem_kind),
+        **methodology_for_project(cwd=cwd, topic=topic, problem_kind=problem_kind, mode=mode),
+    }
+
+
+def gauss_problem_probe(
+    *,
+    statement: str | None = None,
+    cwd: str | None = None,
+    topic: str | None = None,
+    problem_kind: str | None = None,
+    mode: str | None = None,
+    attempt: str | None = None,
+) -> dict[str, Any]:
+    """Return an actionable Pólya/Tao probe plan for a statement or failed attempt."""
+    return {
+        "provider": "local",
+        "mcp_adapter": True,
+        **problem_probe_for_project(
+            statement=statement,
+            cwd=cwd,
+            topic=topic,
+            problem_kind=problem_kind,
+            mode=mode,
+            attempt=attempt,
+        ),
     }
 
 
@@ -1561,9 +1587,19 @@ def build_server() -> FastMCP:
         name="gauss_problem_solving_methodology",
         description=(
             "Return the project-native Pólya/Tao problem-solving workflow "
-            "that Codex should apply while assisting with Lean."
+            "that Codex should apply while assisting with Lean. Supports modes "
+            "such as toy_models, counterexample_probe, hypothesis_audit, "
+            "parameter_plan, proof_strategy, attempt_review, and look_back."
         ),
     )(gauss_problem_solving_methodology)
+    server.tool(
+        name="gauss_problem_probe",
+        description=(
+            "Build an actionable Pólya/Tao probe plan for a mathematical statement "
+            "or failed proof attempt, including toy models, counterexample probes, "
+            "hypothesis audits, parameter plans, and attempt reviews."
+        ),
+    )(gauss_problem_probe)
     server.tool(
         name="gauss_sessions_list",
         description="List stored OpenGauss sessions with previews and activity metadata.",
