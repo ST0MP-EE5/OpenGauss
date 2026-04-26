@@ -18,6 +18,7 @@ from gauss_cli.project import GaussProject, discover_gauss_project
 DEFAULT_CODEX_MODEL = "gpt-5.5"
 DEFAULT_CODEX_REASONING_EFFORT = "high"
 DEFAULT_LEAN_LSP_MCP_SPEC = "lean-lsp-mcp"
+DEFAULT_GAUSS_MCP_SURFACE = "lean"
 QUERY_HARNESS_GUIDANCE = """\
 Use the OpenGauss MCP tools as the primary interface for Lean/project work in this request.
 
@@ -291,6 +292,7 @@ def _write_codex_config(
         "[mcp_servers.opengauss.env]",
         f"GAUSS_ACTIVE_PROJECT = {_toml_string(str(project.root))}",
         f"GAUSS_LEAN_ROOT = {_toml_string(str(project.lean_root))}",
+        f"GAUSS_MCP_SURFACE = {_toml_string(DEFAULT_GAUSS_MCP_SURFACE)}",
         f"GAUSS_PROBLEM_SOLVING_METHODOLOGY = {_toml_string('1' if project_has_methodology(project.root, project.lean_root) else '0')}",
         f"TERMINAL_CWD = {_toml_string(str(project.root))}",
         "",
@@ -383,6 +385,7 @@ def prepare_codex_frontend(
             "CODEX_HOME": str(codex_home),
             "GAUSS_ACTIVE_PROJECT": str(project.root),
             "GAUSS_LEAN_ROOT": str(project.lean_root),
+            "GAUSS_MCP_SURFACE": DEFAULT_GAUSS_MCP_SURFACE,
             "GAUSS_PROBLEM_SOLVING_METHODOLOGY": methodology_enabled,
             "TERMINAL_CWD": str(project.root),
             "GAUSS_CODEX_FRONTEND": "1",

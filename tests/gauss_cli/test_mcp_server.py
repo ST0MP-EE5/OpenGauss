@@ -161,6 +161,88 @@ def test_build_server_registers_full_opengauss_lean_harness_surface(monkeypatch)
     assert "gauss_problem_probe" in registered
 
 
+def test_build_server_lean_surface_hides_admin_and_generic_workflows(monkeypatch):
+    registered = []
+
+    class DummyServer:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def tool(self, *, name, description):
+            del description
+            registered.append(name)
+
+            def _decorator(fn):
+                return fn
+
+            return _decorator
+
+    monkeypatch.setattr(mcp_server, "_ensure_fastmcp", lambda: DummyServer)
+
+    mcp_server.build_server(surface="lean")
+
+    assert "gauss_project_status" in registered
+    assert "gauss_lean_project_status" in registered
+    assert "gauss_problem_probe" in registered
+    assert "gauss_prove_run" in registered
+    assert "gauss_autoprove_run" in registered
+    assert "gauss_formalize_run" in registered
+    assert "gauss_autoformalize_run" in registered
+    assert "gauss_project_init" not in registered
+    assert "gauss_sessions_list" not in registered
+    assert "gauss_swarm_list" not in registered
+    assert "gauss_draft_run" not in registered
+    assert "gauss_review_run" not in registered
+    assert "gauss_checkpoint_run" not in registered
+    assert "gauss_refactor_run" not in registered
+    assert "gauss_golf_run" not in registered
+
+
+def test_build_server_project_and_admin_surfaces_are_separate(monkeypatch):
+    surfaces = {}
+
+    class DummyServer:
+        def __init__(self, *args, **kwargs):
+            self.names = []
+
+        def tool(self, *, name, description):
+            del description
+            self.names.append(name)
+
+            def _decorator(fn):
+                return fn
+
+            return _decorator
+
+    servers = []
+
+    def fake_ensure_fastmcp():
+        class RecordingServer(DummyServer):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                servers.append(self)
+
+        return RecordingServer
+
+    monkeypatch.setattr(mcp_server, "_ensure_fastmcp", fake_ensure_fastmcp)
+
+    mcp_server.build_server(surface="project")
+    surfaces["project"] = set(servers[-1].names)
+    mcp_server.build_server(surface="admin")
+    surfaces["admin"] = set(servers[-1].names)
+
+    assert surfaces["project"] == {
+        "gauss_project_status",
+        "gauss_project_init",
+        "gauss_project_convert",
+        "gauss_project_create",
+    }
+    assert "gauss_sessions_list" in surfaces["admin"]
+    assert "gauss_swarm_status" in surfaces["admin"]
+    assert "gauss_project_init" not in surfaces["admin"]
+    assert "gauss_lean_project_status" not in surfaces["admin"]
+
+
 def test_mcp_file_tools_are_native_harness_adapters(monkeypatch, tmp_path):
     _seed_lean_project(tmp_path)
     mcp_server.gauss_project_init(str(tmp_path), name="Demo Project")
@@ -639,6 +721,24 @@ def test_run_mcp_server_delegates_to_fastmcp(monkeypatch):
     assert captured == {"transport": "stdio"}
 
 
+def test_run_mcp_server_with_surface_rebuilds_server(monkeypatch):
+    captured = {}
+
+    class DummyServer:
+        def run(self, *, transport):
+            captured["transport"] = transport
+
+    def fake_build_server(*, surface=None):
+        captured["surface"] = surface
+        return DummyServer()
+
+    monkeypatch.setattr(mcp_server, "build_server", fake_build_server)
+
+    mcp_server.run_mcp_server(transport="stdio", surface="lean")
+
+    assert captured == {"surface": "lean", "transport": "stdio"}
+
+
 def test_main_dispatches_mcp_server(monkeypatch):
     import gauss_cli.main as main_mod
 
@@ -646,10 +746,11 @@ def test_main_dispatches_mcp_server(monkeypatch):
 
     def fake_cmd_mcp_server(args):
         captured["transport"] = args.transport
+        captured["surface"] = args.surface
 
     monkeypatch.setattr(main_mod, "cmd_mcp_server", fake_cmd_mcp_server)
-    monkeypatch.setattr(sys, "argv", ["gauss", "mcp-server", "--transport", "stdio"])
+    monkeypatch.setattr(sys, "argv", ["gauss", "mcp-server", "--transport", "stdio", "--surface", "lean"])
 
     main_mod.main()
 
-    assert captured == {"transport": "stdio"}
+    assert captured == {"transport": "stdio", "surface": "lean"}

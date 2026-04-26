@@ -72,6 +72,19 @@ _SENSITIVE_ENV_FRAGMENTS = (
 _DEFAULT_RUN_TIMEOUT_SECONDS = 30 * 60
 _DEFAULT_MAX_OUTPUT_CHARS = 20_000
 _DEFAULT_SESSION_LIST_LIMIT = 20
+_MCP_SURFACE_ENV = "GAUSS_MCP_SURFACE"
+MCP_SURFACE_FULL = "full"
+MCP_SURFACE_LEAN = "lean"
+MCP_SURFACE_PROJECT = "project"
+MCP_SURFACE_ADMIN = "admin"
+MCP_SURFACES = frozenset(
+    {
+        MCP_SURFACE_FULL,
+        MCP_SURFACE_LEAN,
+        MCP_SURFACE_PROJECT,
+        MCP_SURFACE_ADMIN,
+    }
+)
 _WORKFLOW_TOOL_SPECS: tuple[tuple[str, str, str], ...] = (
     ("prove", "/prove", "Run the OpenGauss prove workflow."),
     ("draft", "/draft", "Run the OpenGauss draft workflow."),
@@ -82,6 +95,7 @@ _WORKFLOW_TOOL_SPECS: tuple[tuple[str, str, str], ...] = (
     ("autoprove", "/autoprove", "Run the OpenGauss autoprove workflow."),
     ("formalize", "/formalize", "Run the OpenGauss formalize workflow."),
 )
+_LEAN_WORKFLOW_NAMES = frozenset({"prove", "autoprove", "formalize"})
 
 CODEX_MCP_TOOL_ALIASES: dict[str, str] = {
     "read_file": "gauss_read_file",
@@ -116,6 +130,16 @@ def _ensure_fastmcp() -> type[FastMCP]:
             "Install it with `pip install -e .[mcp]`."
         )
     return FastMCP
+
+
+def normalize_mcp_surface(surface: str | None = None) -> str:
+    """Return the requested MCP surface profile."""
+    raw = str(surface or os.getenv(_MCP_SURFACE_ENV) or MCP_SURFACE_FULL).strip().lower()
+    if raw in {"default", "all", "*"}:
+        return MCP_SURFACE_FULL
+    if raw not in MCP_SURFACES:
+        return MCP_SURFACE_FULL
+    return raw
 
 
 def _resolve_cwd(cwd: str | None) -> Path:
@@ -1455,221 +1479,121 @@ for _workflow_name, _frontend_command, _description in _WORKFLOW_TOOL_SPECS:
     globals()[_spawn_name] = _spawn_tool
 
 
-def build_server() -> FastMCP:
+def build_server(*, surface: str | None = None) -> FastMCP:
     """Build the OpenGauss MCP server instance."""
     server_cls = _ensure_fastmcp()
+    active_surface = normalize_mcp_surface(surface)
     server = server_cls(
         SERVER_NAME,
         instructions=(
             "OpenGauss project/workflow adapter. Use these tools to inspect or initialize "
             "a Gauss Lean project and to call native OpenGauss Lean workflows from "
-            "an external MCP client."
+            f"an external MCP client. Active surface: {active_surface}."
         ),
     )
 
-    server.tool(
-        name="gauss_project_status",
-        description="Discover the nearest OpenGauss project from a working directory.",
-    )(gauss_project_status)
-    server.tool(
-        name="gauss_project_init",
-        description="Initialize an OpenGauss project in the given Lean repository.",
-    )(gauss_project_init)
-    server.tool(
-        name="gauss_project_convert",
-        description="Register the current Lean repository as an OpenGauss project.",
-    )(gauss_project_convert)
-    server.tool(
-        name="gauss_project_create",
-        description="Create a new OpenGauss project from a configured blueprint template.",
-    )(gauss_project_create)
-    server.tool(
-        name="gauss_read_file",
-        description="Read a file through the OpenGauss harness file tool.",
-    )(gauss_read_file)
-    server.tool(
-        name="gauss_write_file",
-        description="Write a file through the OpenGauss harness file tool.",
-    )(gauss_write_file)
-    server.tool(
-        name="gauss_patch",
-        description="Patch files through the OpenGauss harness patch tool.",
-    )(gauss_patch)
-    server.tool(
-        name="gauss_search_files",
-        description="Search files through the OpenGauss harness search tool.",
-    )(gauss_search_files)
-    server.tool(
-        name="axle_environments",
-        description="List AXLE Lean environments available to the active OpenGauss runtime.",
-    )(axle_environments)
-    server.tool(
-        name="axle_check",
-        description="Check Lean code with AXLE using project-aware environment resolution.",
-    )(axle_check)
-    server.tool(
-        name="axle_verify_proof",
-        description="Verify a Lean proof with AXLE using project-aware environment resolution.",
-    )(axle_verify_proof)
-    server.tool(
-        name="axle_extract_decls",
-        description="Extract Lean declarations with AXLE using project-aware environment resolution.",
-    )(axle_extract_decls)
-    server.tool(
-        name="axle_repair_proofs",
-        description="Repair Lean proofs with AXLE using project-aware environment resolution.",
-    )(axle_repair_proofs)
-    server.tool(
-        name="axle_simplify_theorems",
-        description="Simplify Lean theorem proofs with AXLE using project-aware environment resolution.",
-    )(axle_simplify_theorems)
-    server.tool(
-        name="axle_normalize",
-        description="Normalize Lean code with AXLE using project-aware environment resolution.",
-    )(axle_normalize)
-    server.tool(
-        name="axle_rename",
-        description="Rename Lean declarations with AXLE using project-aware environment resolution.",
-    )(axle_rename)
-    server.tool(
-        name="gauss_lean_project_status",
-        description="Return native OpenGauss Lean project status.",
-    )(gauss_lean_project_status)
-    server.tool(
-        name="gauss_lean_sorry_report",
-        description="Report Lean sorry/admit findings through native OpenGauss services.",
-    )(gauss_lean_sorry_report)
-    server.tool(
-        name="gauss_lean_lake_build",
-        description="Run controlled native `lake build` for the active OpenGauss Lean project.",
-    )(gauss_lean_lake_build)
-    server.tool(
-        name="gauss_lean_check_file",
-        description="Run controlled native `lake env lean <file>` for the active OpenGauss Lean project.",
-    )(gauss_lean_check_file)
-    server.tool(
-        name="gauss_lean_lsp_diagnostics",
-        description="Return native Lean diagnostics for a file; MCP is only an adapter.",
-    )(gauss_lean_lsp_diagnostics)
-    server.tool(
-        name="gauss_lean_lsp_goals",
-        description="Return native Lean goal/context information at a cursor; MCP is only an adapter.",
-    )(gauss_lean_lsp_goals)
-    server.tool(
-        name="gauss_lean_lsp_hover",
-        description="Return native Lean hover information at a cursor; MCP is only an adapter.",
-    )(gauss_lean_lsp_hover)
-    server.tool(
-        name="gauss_lean_lsp_definition",
-        description="Find likely Lean definition sites through the native declaration index.",
-    )(gauss_lean_lsp_definition)
-    server.tool(
-        name="gauss_lean_lsp_references",
-        description="Find Lean symbol references through the native reference index.",
-    )(gauss_lean_lsp_references)
-    server.tool(
-        name="gauss_lean_lsp_symbols",
-        description="Search Lean declarations through the native declaration index.",
-    )(gauss_lean_lsp_symbols)
-    server.tool(
-        name="gauss_lean_proof_context",
-        description="Return combined native Lean proof context for a file.",
-    )(gauss_lean_proof_context)
-    server.tool(
-        name="gauss_lean_comparator_check",
-        description="Run native Comparator proof audit; MCP is only an adapter.",
-    )(gauss_lean_comparator_check)
-    server.tool(
-        name="gauss_lean_project_inspect",
-        description="Run controlled read-only project inspection through the OpenGauss Lean harness.",
-    )(gauss_lean_project_inspect)
-    server.tool(
-        name="gauss_problem_solving_methodology",
-        description=(
-            "Return the project-native Pólya/Tao problem-solving workflow "
-            "that Codex should apply while assisting with Lean. Supports modes "
-            "such as toy_models, counterexample_probe, hypothesis_audit, "
-            "parameter_plan, proof_strategy, attempt_review, and look_back."
+    def include(*surfaces: str) -> bool:
+        return active_surface == MCP_SURFACE_FULL or active_surface in surfaces
+
+    def register(name: str, description: str, handler, *surfaces: str) -> None:
+        if include(*surfaces):
+            server.tool(name=name, description=description)(handler)
+
+    register("gauss_project_status", "Discover the nearest OpenGauss project from a working directory.", gauss_project_status, MCP_SURFACE_LEAN, MCP_SURFACE_PROJECT)
+    register("gauss_project_init", "Initialize an OpenGauss project in the given Lean repository.", gauss_project_init, MCP_SURFACE_PROJECT)
+    register("gauss_project_convert", "Register the current Lean repository as an OpenGauss project.", gauss_project_convert, MCP_SURFACE_PROJECT)
+    register("gauss_project_create", "Create a new OpenGauss project from a configured blueprint template.", gauss_project_create, MCP_SURFACE_PROJECT)
+    register("gauss_read_file", "Read a file through the OpenGauss harness file tool.", gauss_read_file, MCP_SURFACE_LEAN)
+    register("gauss_write_file", "Write a file through the OpenGauss harness file tool.", gauss_write_file, MCP_SURFACE_LEAN)
+    register("gauss_patch", "Patch files through the OpenGauss harness patch tool.", gauss_patch, MCP_SURFACE_LEAN)
+    register("gauss_search_files", "Search files through the OpenGauss harness search tool.", gauss_search_files, MCP_SURFACE_LEAN)
+    register("axle_environments", "List AXLE Lean environments available to the active OpenGauss runtime.", axle_environments, MCP_SURFACE_LEAN)
+    register("axle_check", "Check Lean code with AXLE using project-aware environment resolution.", axle_check, MCP_SURFACE_LEAN)
+    register("axle_verify_proof", "Verify a Lean proof with AXLE using project-aware environment resolution.", axle_verify_proof, MCP_SURFACE_LEAN)
+    register("axle_extract_decls", "Extract Lean declarations with AXLE using project-aware environment resolution.", axle_extract_decls, MCP_SURFACE_LEAN)
+    register("axle_repair_proofs", "Repair Lean proofs with AXLE using project-aware environment resolution.", axle_repair_proofs, MCP_SURFACE_LEAN)
+    register("axle_simplify_theorems", "Simplify Lean theorem proofs with AXLE using project-aware environment resolution.", axle_simplify_theorems, MCP_SURFACE_LEAN)
+    register("axle_normalize", "Normalize Lean code with AXLE using project-aware environment resolution.", axle_normalize, MCP_SURFACE_LEAN)
+    register("axle_rename", "Rename Lean declarations with AXLE using project-aware environment resolution.", axle_rename, MCP_SURFACE_LEAN)
+    register("gauss_lean_project_status", "Return native OpenGauss Lean project status.", gauss_lean_project_status, MCP_SURFACE_LEAN)
+    register("gauss_lean_sorry_report", "Report Lean sorry/admit findings through native OpenGauss services.", gauss_lean_sorry_report, MCP_SURFACE_LEAN)
+    register("gauss_lean_lake_build", "Run controlled native `lake build` for the active OpenGauss Lean project.", gauss_lean_lake_build, MCP_SURFACE_LEAN)
+    register("gauss_lean_check_file", "Run controlled native `lake env lean <file>` for the active OpenGauss Lean project.", gauss_lean_check_file, MCP_SURFACE_LEAN)
+    register("gauss_lean_lsp_diagnostics", "Return native Lean diagnostics for a file; MCP is only an adapter.", gauss_lean_lsp_diagnostics, MCP_SURFACE_LEAN)
+    register("gauss_lean_lsp_goals", "Return native Lean goal/context information at a cursor; MCP is only an adapter.", gauss_lean_lsp_goals, MCP_SURFACE_LEAN)
+    register("gauss_lean_lsp_hover", "Return native Lean hover information at a cursor; MCP is only an adapter.", gauss_lean_lsp_hover, MCP_SURFACE_LEAN)
+    register("gauss_lean_lsp_definition", "Find likely Lean definition sites through the native declaration index.", gauss_lean_lsp_definition, MCP_SURFACE_LEAN)
+    register("gauss_lean_lsp_references", "Find Lean symbol references through the native reference index.", gauss_lean_lsp_references, MCP_SURFACE_LEAN)
+    register("gauss_lean_lsp_symbols", "Search Lean declarations through the native declaration index.", gauss_lean_lsp_symbols, MCP_SURFACE_LEAN)
+    register("gauss_lean_proof_context", "Return combined native Lean proof context for a file.", gauss_lean_proof_context, MCP_SURFACE_LEAN)
+    register("gauss_lean_comparator_check", "Run native Comparator proof audit; MCP is only an adapter.", gauss_lean_comparator_check, MCP_SURFACE_LEAN)
+    register("gauss_lean_project_inspect", "Run controlled read-only project inspection through the OpenGauss Lean harness.", gauss_lean_project_inspect, MCP_SURFACE_LEAN)
+    register(
+        "gauss_problem_solving_methodology",
+        (
+            "Return the project-native Pólya/Tao problem-solving workflow that Codex should apply while assisting with Lean. "
+            "Supports modes such as toy_models, counterexample_probe, hypothesis_audit, parameter_plan, proof_strategy, "
+            "attempt_review, and look_back."
         ),
-    )(gauss_problem_solving_methodology)
-    server.tool(
-        name="gauss_problem_probe",
-        description=(
-            "Build an actionable Pólya/Tao probe plan for a mathematical statement "
-            "or failed proof attempt, including toy models, counterexample probes, "
-            "hypothesis audits, parameter plans, and attempt reviews."
-        ),
-    )(gauss_problem_probe)
-    server.tool(
-        name="gauss_sessions_list",
-        description="List stored OpenGauss sessions with previews and activity metadata.",
-    )(gauss_sessions_list)
-    server.tool(
-        name="gauss_session_export",
-        description="Export a stored OpenGauss session and its messages.",
-    )(gauss_session_export)
-    server.tool(
-        name="gauss_session_rename",
-        description="Rename a stored OpenGauss session.",
-    )(gauss_session_rename)
-    server.tool(
-        name="gauss_sessions_prune",
-        description="Prune old ended OpenGauss sessions.",
-    )(gauss_sessions_prune)
-    server.tool(
-        name="gauss_swarm_list",
-        description="List tracked OpenGauss swarm tasks.",
-    )(gauss_swarm_list)
-    server.tool(
-        name="gauss_swarm_status",
-        description="Inspect a single OpenGauss swarm task.",
-    )(gauss_swarm_status)
-    server.tool(
-        name="gauss_swarm_cancel",
-        description="Cancel a running OpenGauss swarm task.",
-    )(gauss_swarm_cancel)
-    server.tool(
-        name="gauss_autoformalize_prepare",
-        description=(
-            "Resolve an OpenGauss Lean workflow command such as /prove or "
-            "/autoformalize into native project/runtime state."
-        ),
-    )(gauss_autoformalize_prepare)
-    server.tool(
-        name="gauss_autoformalize_run",
-        description=(
-            "Run an OpenGauss native Lean workflow command and return structured results."
-        ),
-    )(gauss_autoformalize_run)
-    server.tool(
-        name="gauss_autoformalize_spawn",
-        description=(
-            "Spawn an OpenGauss native Lean workflow command as a background swarm task "
-            "and return structured task metadata."
-        ),
-    )(gauss_autoformalize_spawn)
+        gauss_problem_solving_methodology,
+        MCP_SURFACE_LEAN,
+    )
+    register(
+        "gauss_problem_probe",
+        "Build an actionable Pólya/Tao probe plan for a mathematical statement or failed proof attempt.",
+        gauss_problem_probe,
+        MCP_SURFACE_LEAN,
+    )
+    register("gauss_sessions_list", "List stored OpenGauss sessions with previews and activity metadata.", gauss_sessions_list, MCP_SURFACE_ADMIN)
+    register("gauss_session_export", "Export a stored OpenGauss session and its messages.", gauss_session_export, MCP_SURFACE_ADMIN)
+    register("gauss_session_rename", "Rename a stored OpenGauss session.", gauss_session_rename, MCP_SURFACE_ADMIN)
+    register("gauss_sessions_prune", "Prune old ended OpenGauss sessions.", gauss_sessions_prune, MCP_SURFACE_ADMIN)
+    register("gauss_swarm_list", "List tracked OpenGauss swarm tasks.", gauss_swarm_list, MCP_SURFACE_ADMIN)
+    register("gauss_swarm_status", "Inspect a single OpenGauss swarm task.", gauss_swarm_status, MCP_SURFACE_ADMIN)
+    register("gauss_swarm_cancel", "Cancel a running OpenGauss swarm task.", gauss_swarm_cancel, MCP_SURFACE_ADMIN)
+    register(
+        "gauss_autoformalize_prepare",
+        "Resolve an OpenGauss Lean workflow command such as /prove or /autoformalize into native project/runtime state.",
+        gauss_autoformalize_prepare,
+        MCP_SURFACE_LEAN,
+    )
+    register("gauss_autoformalize_run", "Run an OpenGauss native Lean workflow command and return structured results.", gauss_autoformalize_run, MCP_SURFACE_LEAN)
+    register(
+        "gauss_autoformalize_spawn",
+        "Spawn an OpenGauss native Lean workflow command as a background task and return structured task metadata.",
+        gauss_autoformalize_spawn,
+        MCP_SURFACE_LEAN,
+    )
     for workflow_name, frontend_command, description in _WORKFLOW_TOOL_SPECS:
-        server.tool(
-            name=f"gauss_{workflow_name}_prepare",
-            description=f"{description} Return native project/runtime state.",
-        )(globals()[f"gauss_{workflow_name}_prepare"])
-        server.tool(
-            name=f"gauss_{workflow_name}_run",
-            description=f"{description} Execute it noninteractively and return structured results.",
-        )(globals()[f"gauss_{workflow_name}_run"])
-        server.tool(
-            name=f"gauss_{workflow_name}_spawn",
-            description=f"{description} Spawn it as a background swarm task.",
-        )(globals()[f"gauss_{workflow_name}_spawn"])
+        workflow_surfaces = (MCP_SURFACE_LEAN,) if workflow_name in _LEAN_WORKFLOW_NAMES else ()
+        register(
+            f"gauss_{workflow_name}_prepare",
+            f"{description} Return native project/runtime state.",
+            globals()[f"gauss_{workflow_name}_prepare"],
+            *workflow_surfaces,
+        )
+        register(
+            f"gauss_{workflow_name}_run",
+            f"{description} Execute it noninteractively and return structured results.",
+            globals()[f"gauss_{workflow_name}_run"],
+            *workflow_surfaces,
+        )
+        register(
+            f"gauss_{workflow_name}_spawn",
+            f"{description} Spawn it as a background swarm task.",
+            globals()[f"gauss_{workflow_name}_spawn"],
+            *workflow_surfaces,
+        )
     return server
 
 
 MCP_SERVER = build_server() if FastMCP is not None else None
 
 
-def run_mcp_server(*, transport: str = "stdio") -> None:
+def run_mcp_server(*, transport: str = "stdio", surface: str | None = None) -> None:
     """Run the OpenGauss MCP server."""
-    if MCP_SERVER is None:  # pragma: no cover - exercised via CLI guard
+    server = build_server(surface=surface) if surface is not None else MCP_SERVER
+    if server is None:  # pragma: no cover - exercised via CLI guard
         _ensure_fastmcp()
-    assert MCP_SERVER is not None
-    MCP_SERVER.run(transport=transport)
+    assert server is not None
+    server.run(transport=transport)

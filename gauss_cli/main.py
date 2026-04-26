@@ -1375,7 +1375,7 @@ def cmd_mcp_server(args):
         raise SystemExit(1) from exc
 
     try:
-        run_mcp_server(transport=args.transport)
+        run_mcp_server(transport=args.transport, surface=getattr(args, "surface", None))
     except RuntimeError as exc:
         print(f"Error: {exc}")
         sys.exit(1)
@@ -2142,6 +2142,15 @@ For more help on a command:
         choices=["stdio", "sse", "streamable-http"],
         default="stdio",
         help="MCP transport to serve (default: stdio)",
+    )
+    mcp_server_parser.add_argument(
+        "--surface",
+        choices=["full", "lean", "project", "admin"],
+        default=None,
+        help=(
+            "MCP tool surface to expose. Defaults to full for standalone external clients; "
+            "the `gauss` project launcher sets lean for its project-scoped Codex profile."
+        ),
     )
     mcp_server_parser.set_defaults(func=cmd_mcp_server)
 

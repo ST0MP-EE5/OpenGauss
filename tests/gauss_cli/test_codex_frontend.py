@@ -29,6 +29,7 @@ def test_prepare_codex_frontend_auto_selects_checked_in_lean4(monkeypatch, tmp_p
     assert 'model = "gpt-5.5"' in config_text
     assert 'model_reasoning_effort = "high"' in config_text
     assert "[mcp_servers.opengauss]" in config_text
+    assert 'GAUSS_MCP_SURFACE = "lean"' in config_text
     assert "gauss_cli.main" in config_text
     instructions = plan.instructions_path.read_text(encoding="utf-8")
     assert "OpenGauss owns the Lean project" in instructions
@@ -84,6 +85,7 @@ def test_prepare_codex_frontend_injects_problem_solving_methodology(monkeypatch,
     config_text = plan.config_path.read_text(encoding="utf-8")
     instructions = plan.instructions_path.read_text(encoding="utf-8")
     assert 'GAUSS_PROBLEM_SOLVING_METHODOLOGY = "1"' in config_text
+    assert plan.child_env["GAUSS_MCP_SURFACE"] == "lean"
     assert plan.child_env["GAUSS_PROBLEM_SOLVING_METHODOLOGY"] == "1"
     assert "gauss_problem_solving_methodology" in instructions
     assert "gauss_problem_probe" in instructions
@@ -208,6 +210,7 @@ def test_launch_codex_frontend_invokes_codex(monkeypatch, tmp_path):
     assert captured["argv"][1] == "--dangerously-bypass-approvals-and-sandbox"
     assert captured["cwd"] == main_mod.PROJECT_ROOT / "Lean4"
     assert captured["env"]["GAUSS_ACTIVE_PROJECT"].endswith("/Lean4")
+    assert captured["env"]["GAUSS_MCP_SURFACE"] == "lean"
     assert captured["env"]["GAUSS_PROBLEM_SOLVING_METHODOLOGY"] == "1"
 
 
