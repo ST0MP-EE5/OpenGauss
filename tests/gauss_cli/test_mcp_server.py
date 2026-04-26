@@ -157,6 +157,7 @@ def test_build_server_registers_full_opengauss_lean_harness_surface(monkeypatch)
     assert "gauss_lean_proof_context" in registered
     assert "gauss_lean_comparator_check" in registered
     assert "gauss_lean_project_inspect" in registered
+    assert "gauss_problem_solving_methodology" in registered
 
 
 def test_mcp_file_tools_are_native_harness_adapters(monkeypatch, tmp_path):
@@ -280,6 +281,31 @@ def test_mcp_lsp_and_comparator_tools_are_native_adapters(monkeypatch):
     assert comparator["mcp_adapter"] is True
     assert comparator["comparator_valid"] is True
     assert comparator["mcp_call_count"] == 0
+
+
+def test_problem_solving_methodology_reports_project_module(tmp_path):
+    _seed_lean_project(tmp_path)
+    mcp_server.gauss_project_init(str(tmp_path), name="Demo")
+    module = tmp_path / "OpenGaussLean4" / "ProblemSolvingMethodology.lean"
+    module.parent.mkdir()
+    module.write_text("namespace OpenGaussLean4\nend OpenGaussLean4\n", encoding="utf-8")
+
+    result = mcp_server.gauss_problem_solving_methodology(
+        cwd=str(tmp_path),
+        topic="functions",
+        problem_kind="show/evaluate",
+    )
+
+    assert result["success"] is True
+    assert result["operation"] == "problem_solving_methodology"
+    assert result["mcp_adapter"] is True
+    assert result["enabled"] is True
+    assert result["methodology_module"] == str(module)
+    assert result["topic"] == "functions"
+    assert result["topic_moves"]
+    assert any(source["author"] == "George Polya" for source in result["source_basis"])
+    assert any(source["author"] == "Terence Tao" for source in result["source_basis"])
+    assert any("245A" in source["title"] for source in result["source_basis"])
 
 
 def test_gauss_autoformalize_prepare_returns_direct_native_payload(tmp_path):

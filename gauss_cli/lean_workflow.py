@@ -12,6 +12,7 @@ from typing import Any, Mapping
 from gauss_cli.project import GaussProject, discover_gauss_project, format_project_summary
 from gauss_cli.runtime_provider import resolve_runtime_provider
 from gauss_cli.lean_workflow_profiles import get_workflow_profile
+from gauss_cli.problem_solving_methodology import compact_methodology_prompt
 
 DEFAULT_NATIVE_LEAN_MODEL = "gpt-5.5"
 NATIVE_LEAN_PROVIDER = "openai-codex"
@@ -189,6 +190,15 @@ def _build_system_message(plan: NativeLeanWorkflowPlan, extra_guidance: list[str
         "Finish with a concise status that names changed files and the strongest verification result obtained.",
     ]
     lines.append("If Comparator is unavailable or failing, keep working or report the exact blocking Comparator failure; do not claim success.")
+    methodology_prompt = compact_methodology_prompt(project.root)
+    if methodology_prompt:
+        lines.extend(
+            [
+                "Problem-solving methodology guidance:",
+                methodology_prompt,
+                "Use the methodology internally to choose proof moves; do not require the user to recite the checklist.",
+            ]
+        )
     if extra_guidance:
         lines.extend(["Additional run guidance:", *[str(item) for item in extra_guidance if str(item).strip()]])
     return "\n".join(lines)

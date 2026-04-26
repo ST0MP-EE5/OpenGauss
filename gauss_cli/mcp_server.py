@@ -39,6 +39,7 @@ from gauss_cli.lean_workflow import (
     prepare_native_lean_workflow,
     run_native_lean_workflow,
 )
+from gauss_cli.problem_solving_methodology import methodology_for_project
 from gauss_cli.project import (
     GaussProject,
     ProjectCommandError,
@@ -100,6 +101,7 @@ CODEX_MCP_TOOL_ALIASES: dict[str, str] = {
     "lean_proof_context": "gauss_lean_proof_context",
     "lean_comparator_check": "gauss_lean_comparator_check",
     "lean_project_inspect": "gauss_lean_project_inspect",
+    "problem_solving_methodology": "gauss_problem_solving_methodology",
 }
 
 for _tool_name in resolve_toolset(NATIVE_LEAN_TOOLSET):
@@ -1013,6 +1015,21 @@ def gauss_lean_comparator_check(
     return {"mcp_adapter": True, **payload}
 
 
+def gauss_problem_solving_methodology(
+    *,
+    cwd: str | None = None,
+    topic: str | None = None,
+    problem_kind: str | None = None,
+) -> dict[str, Any]:
+    """Return project-native Pólya/Tao methodology guidance for Lean mathematical work."""
+    return {
+        "provider": "local",
+        "operation": "problem_solving_methodology",
+        "mcp_adapter": True,
+        **methodology_for_project(cwd=cwd, topic=topic, problem_kind=problem_kind),
+    }
+
+
 def gauss_sessions_list(
     *,
     source: str | None = None,
@@ -1540,6 +1557,13 @@ def build_server() -> FastMCP:
         name="gauss_lean_project_inspect",
         description="Run controlled read-only project inspection through the OpenGauss Lean harness.",
     )(gauss_lean_project_inspect)
+    server.tool(
+        name="gauss_problem_solving_methodology",
+        description=(
+            "Return the project-native Pólya/Tao problem-solving workflow "
+            "that Codex should apply while assisting with Lean."
+        ),
+    )(gauss_problem_solving_methodology)
     server.tool(
         name="gauss_sessions_list",
         description="List stored OpenGauss sessions with previews and activity metadata.",

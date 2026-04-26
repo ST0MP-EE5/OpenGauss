@@ -91,3 +91,35 @@ def test_run_native_lean_workflow_accepts_reasoning_effort(monkeypatch):
     assert captured["kwargs"]["reasoning_config"] == {"enabled": True, "effort": "high"}
     assert captured["kwargs"]["skip_context_files"] is True
     assert captured["kwargs"]["skip_memory"] is True
+
+
+def test_run_native_lean_workflow_injects_problem_solving_methodology(monkeypatch, tmp_path):
+    (tmp_path / "OpenGaussLean4").mkdir()
+    (tmp_path / "OpenGaussLean4" / "ProblemSolvingMethodology.lean").write_text(
+        "namespace OpenGaussLean4\nend OpenGaussLean4\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "lakefile.toml").write_text("[[lean_lib]]\nname = \"OpenGaussLean4\"\n", encoding="utf-8")
+    from gauss_cli.project import initialize_gauss_project
+
+    initialize_gauss_project(tmp_path, name="Demo")
+    captured = {}
+
+    class FakeAgent:
+        def __init__(self, **kwargs):
+            self.session_id = kwargs["session_id"]
+
+        def run_conversation(self, user_message, *, system_message=None, task_id=None, persist_user_message=None):
+            del user_message, task_id, persist_user_message
+            captured["system_message"] = system_message
+            return {"final_response": "done", "messages": []}
+
+    monkeypatch.setattr(lean_workflow, "resolve_runtime_provider", lambda requested: {"api_key": "tok", "base_url": "url"})
+    import run_agent
+
+    monkeypatch.setattr(run_agent, "AIAgent", FakeAgent)
+
+    lean_workflow.run_native_lean_workflow("/prove theorem", cwd=tmp_path, session_id="sess-methodology")
+
+    assert "Problem-solving methodology module detected" in captured["system_message"]
+    assert "understand -> devise_plan -> carry_out -> look_back" in captured["system_message"]

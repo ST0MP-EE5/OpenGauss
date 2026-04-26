@@ -59,6 +59,35 @@ def test_prepare_codex_frontend_allows_explicit_project(monkeypatch, tmp_path):
     assert plan.active_cwd == project_root
 
 
+def test_prepare_codex_frontend_injects_problem_solving_methodology(monkeypatch, tmp_path):
+    codex_bin = tmp_path / "codex"
+    codex_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+    codex_bin.chmod(0o755)
+    project_root = tmp_path / "Demo"
+    (project_root / "OpenGaussLean4").mkdir(parents=True)
+    (project_root / "OpenGaussLean4" / "ProblemSolvingMethodology.lean").write_text(
+        "namespace OpenGaussLean4\nend OpenGaussLean4\n",
+        encoding="utf-8",
+    )
+    (project_root / "lakefile.toml").write_text("[[lean_lib]]\nname = \"OpenGaussLean4\"\n", encoding="utf-8")
+    (project_root / "lean-toolchain").write_text("leanprover/lean4:v4.28.0\n", encoding="utf-8")
+    from gauss_cli.project import initialize_gauss_project
+
+    initialize_gauss_project(project_root, name="Demo")
+
+    plan = codex_frontend.prepare_codex_frontend(
+        env={"PATH": str(tmp_path)},
+        cwd=tmp_path,
+        project_path="Demo",
+    )
+
+    config_text = plan.config_path.read_text(encoding="utf-8")
+    instructions = plan.instructions_path.read_text(encoding="utf-8")
+    assert 'GAUSS_PROBLEM_SOLVING_METHODOLOGY = "1"' in config_text
+    assert "gauss_problem_solving_methodology" in instructions
+    assert "Problem-solving methodology module detected" in instructions
+
+
 def test_prepare_codex_frontend_stages_lean4_skill_and_lsp_mcp(monkeypatch, tmp_path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()

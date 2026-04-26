@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from gauss_cli.config import get_gauss_home, get_project_root
+from gauss_cli.problem_solving_methodology import compact_methodology_prompt, project_has_methodology
 from gauss_cli.project import GaussProject, discover_gauss_project
 
 DEFAULT_CODEX_MODEL = "gpt-5.5"
@@ -228,6 +229,7 @@ def _write_codex_instructions(
         "Use OpenGauss tools for Lean work:",
         "- The `opengauss` MCP server mirrors the canonical `opengauss-lean` harness surface for interactive use.",
         "- The Lean4 workflow skill is staged into this Codex profile when available; use it as the standing proof-engineering playbook.",
+        "- Use `gauss_problem_solving_methodology` for mathematical learning/proof tasks when the next method or proof shape is unclear.",
         "- Use `gauss_lean_project_status` before changing proofs when project state is unclear.",
         "- Use `gauss_read_file`, `gauss_search_files`, `gauss_write_file`, and `gauss_patch` for project file work.",
         "- Use `gauss_lean_lsp_diagnostics`, `gauss_lean_lsp_goals`, `gauss_lean_lsp_hover`, `gauss_lean_lsp_definition`, `gauss_lean_lsp_references`, and `gauss_lean_lsp_symbols` for Lean context.",
@@ -242,6 +244,16 @@ def _write_codex_instructions(
         "For normal project learning, prefer read-only Lean context tools before editing. For proof automation, keep the loop inside OpenGauss tools and artifacts.",
         "",
     ]
+    methodology_prompt = compact_methodology_prompt(project.root)
+    if methodology_prompt:
+        lines.extend(
+            [
+                "Problem-solving methodology:",
+                f"- {methodology_prompt}",
+                "- Apply this process as an internal discipline; keep user-facing explanations short and tied to the current Lean target.",
+                "",
+            ]
+        )
     if lean4_skill_path is not None:
         lines.extend([f"Lean4 skill path: `{lean4_skill_path}`", ""])
     if lean_lsp_mcp_enabled:
@@ -278,6 +290,7 @@ def _write_codex_config(
         "[mcp_servers.opengauss.env]",
         f"GAUSS_ACTIVE_PROJECT = {_toml_string(str(project.root))}",
         f"GAUSS_LEAN_ROOT = {_toml_string(str(project.lean_root))}",
+        f"GAUSS_PROBLEM_SOLVING_METHODOLOGY = {_toml_string('1' if project_has_methodology(project.root, project.lean_root) else '0')}",
         f"TERMINAL_CWD = {_toml_string(str(project.root))}",
         "",
     ]

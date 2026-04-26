@@ -1,5 +1,6 @@
 import OpenGaussLean4.Basic
 import OpenGaussLean4.ProblemSolvingStrategies
+import OpenGaussLean4.ProblemSolvingMethodology
 import OpenGaussLean4.Algebra.Identities
 import OpenGaussLean4.Calculus.FiniteDifference
 import OpenGaussLean4.FoundationsOfMathematics.Exam3
