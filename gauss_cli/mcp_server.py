@@ -911,7 +911,7 @@ def gauss_lean_lsp_diagnostics(
     path: str,
     *,
     cwd: str | None = None,
-    timeout_seconds: int = 30 * 60,
+    timeout_seconds: int = 60,
 ) -> dict[str, Any]:
     """Adapter over native Lean diagnostics service."""
     try:
@@ -927,10 +927,19 @@ def gauss_lean_lsp_goals(
     column: int,
     *,
     cwd: str | None = None,
+    include_diagnostics: bool = False,
+    timeout_seconds: int = 60,
 ) -> dict[str, Any]:
     """Adapter over native Lean goal-context service."""
     try:
-        payload = local_lean_lsp_goals(path=path, line=line, column=column, cwd=cwd)
+        payload = local_lean_lsp_goals(
+            path=path,
+            line=line,
+            column=column,
+            cwd=cwd,
+            include_diagnostics=include_diagnostics,
+            timeout_seconds=timeout_seconds,
+        )
     except Exception as exc:
         return _native_lean_error_payload("lean_lsp_goals", exc)
     return {"success": True, "operation": "lean_lsp_goals", "mcp_adapter": True, **payload}
@@ -1003,10 +1012,19 @@ def gauss_lean_proof_context(
     cwd: str | None = None,
     line: int | None = None,
     column: int | None = None,
+    include_diagnostics: bool = False,
+    timeout_seconds: int = 60,
 ) -> dict[str, Any]:
     """Adapter over native combined Lean proof context."""
     try:
-        payload = local_lean_proof_context(path=path, cwd=cwd, line=line, column=column)
+        payload = local_lean_proof_context(
+            path=path,
+            cwd=cwd,
+            line=line,
+            column=column,
+            include_diagnostics=include_diagnostics,
+            timeout_seconds=timeout_seconds,
+        )
     except Exception as exc:
         return _native_lean_error_payload("lean_proof_context", exc)
     return {"success": True, "operation": "lean_proof_context", "mcp_adapter": True, **payload}

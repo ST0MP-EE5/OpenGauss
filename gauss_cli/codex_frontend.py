@@ -19,6 +19,7 @@ DEFAULT_CODEX_MODEL = "gpt-5.5"
 DEFAULT_CODEX_REASONING_EFFORT = "high"
 DEFAULT_LEAN_LSP_MCP_SPEC = "lean-lsp-mcp"
 DEFAULT_GAUSS_MCP_SURFACE = "lean"
+_TRUE_VALUES = {"1", "true", "yes", "on"}
 QUERY_HARNESS_GUIDANCE = """\
 Use the OpenGauss MCP tools as the primary interface for Lean/project work in this request.
 
@@ -179,7 +180,11 @@ def _lean_lsp_mcp_runner(env: Mapping[str, str]) -> tuple[str, ...] | None:
     explicit = str(env.get("GAUSS_LEAN_LSP_MCP_COMMAND", "") or "").strip()
     if explicit:
         return (explicit,)
-    spec = str(env.get("GAUSS_LEAN_LSP_MCP_SPEC", "") or "").strip() or DEFAULT_LEAN_LSP_MCP_SPEC
+    spec_override = str(env.get("GAUSS_LEAN_LSP_MCP_SPEC", "") or "").strip()
+    enabled = str(env.get("GAUSS_ENABLE_EXTERNAL_LEAN_LSP_MCP", "") or "").strip().lower() in _TRUE_VALUES
+    if not enabled and not spec_override:
+        return None
+    spec = spec_override or DEFAULT_LEAN_LSP_MCP_SPEC
     uvx = shutil.which("uvx", path=env.get("PATH"))
     if uvx:
         return (uvx, "--from", spec, "lean-lsp-mcp")

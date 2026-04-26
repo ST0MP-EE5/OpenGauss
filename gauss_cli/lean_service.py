@@ -22,6 +22,7 @@ from gauss_cli.project import (
 SUPPORTED_LEAN_SERVICE_PROVIDERS = {"local", "axle"}
 DEFAULT_LEAN_SERVICE_PROVIDER = "local"
 DEFAULT_AXLE_URL = "https://axle.axiommath.ai"
+DEFAULT_LEAN_LSP_DIAGNOSTIC_TIMEOUT_SECONDS = 60
 _LEAN_TOOLCHAIN_VERSION_RE = re.compile(r"^(?:leanprover/lean4:)?v?(\d+\.\d+\.\d+)$")
 _SORRY_RE = re.compile(r"\b(?:sorry|admit)\b")
 _LEAN_FILE_EXCLUDED_PARTS = {".git", ".lake", ".gauss", "__pycache__"}
@@ -617,7 +618,7 @@ def local_lean_lsp_diagnostics(
     *,
     path: str | Path,
     cwd: str | Path | None = None,
-    timeout_seconds: int = 30 * 60,
+    timeout_seconds: int = DEFAULT_LEAN_LSP_DIAGNOSTIC_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """Return Lean diagnostics for a project file through controlled local checks."""
     project, target = _resolve_project_and_lean_file(path=path, cwd=cwd)
@@ -848,12 +849,14 @@ def local_lean_lsp_goals(
     column: int,
     cwd: str | Path | None = None,
     context_radius: int = 12,
+    include_diagnostics: bool = False,
+    timeout_seconds: int = DEFAULT_LEAN_LSP_DIAGNOSTIC_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """Return local proof-state context near a Lean cursor position.
 
     This is an OpenGauss-native fallback for useful goal-state affordances. It
-    avoids MCP and shell access; diagnostics come from `lake env lean`, and the
-    local goal context is derived from the enclosing declaration and source.
+    avoids MCP and shell access. By default it returns cheap source context
+    only; callers can opt into diagnostics when they need a Lean check.
     """
     project, target = _resolve_project_and_lean_file(path=path, cwd=cwd)
     lines = target.read_text(encoding="utf-8").splitlines()
@@ -870,11 +873,19 @@ def local_lean_lsp_goals(
         for index in range(start_line, end_line + 1)
     ]
     enclosing = _find_enclosing_declaration(target, lean_root=project.lean_root, line=line_number)
-    diagnostics_payload = local_lean_lsp_diagnostics(path=target, cwd=project.root, timeout_seconds=30 * 60)
-    relevant_diagnostics = [
-        item for item in diagnostics_payload["diagnostics"]
-        if abs(int(item.get("line", 0)) - line_number) <= radius
-    ]
+    relevant_diagnostics: list[dict[str, Any]] = []
+    diagnostics_timed_out = False
+    if include_diagnostics:
+        diagnostics_payload = local_lean_lsp_diagnostics(
+            path=target,
+            cwd=project.root,
+            timeout_seconds=timeout_seconds,
+        )
+        diagnostics_timed_out = bool(diagnostics_payload.get("timed_out"))
+        relevant_diagnostics = [
+            item for item in diagnostics_payload["diagnostics"]
+            if abs(int(item.get("line", 0)) - line_number) <= radius
+        ]
     sorries = [
         {**finding, "relative_path": str(target.relative_to(project.lean_root))}
         for finding in detect_sorries(target.read_text(encoding="utf-8"))
@@ -893,6 +904,8 @@ def local_lean_lsp_goals(
         "enclosing_declaration": enclosing,
         "source_window": source_window,
         "diagnostics": relevant_diagnostics,
+        "diagnostics_included": bool(include_diagnostics),
+        "diagnostics_timed_out": diagnostics_timed_out,
         "sorries": sorries,
         "goal_state_available": False,
         "goal_state_note": (
@@ -908,11 +921,21 @@ def local_lean_proof_context(
     cwd: str | Path | None = None,
     line: int | None = None,
     column: int | None = None,
+    include_diagnostics: bool = False,
+    timeout_seconds: int = DEFAULT_LEAN_LSP_DIAGNOSTIC_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """Return a compact combined Lean proof context for workflow prompts."""
     project, target = _resolve_project_and_lean_file(path=path, cwd=cwd)
     content = target.read_text(encoding="utf-8")
-    diagnostics = local_lean_lsp_diagnostics(path=target, cwd=project.root)
+    diagnostics = (
+        local_lean_lsp_diagnostics(path=target, cwd=project.root, timeout_seconds=timeout_seconds)
+        if include_diagnostics
+        else {
+            "diagnostics": [],
+            "diagnostic_count": 0,
+            "timed_out": False,
+        }
+    )
     sorry_findings = detect_sorries(content)
     payload: dict[str, Any] = {
         "provider": "local",
@@ -925,6 +948,8 @@ def local_lean_proof_context(
         "imports": _imports_for_content(content),
         "diagnostics": diagnostics["diagnostics"],
         "diagnostic_count": diagnostics["diagnostic_count"],
+        "diagnostics_included": bool(include_diagnostics),
+        "diagnostics_timed_out": bool(diagnostics.get("timed_out")),
         "sorries": sorry_findings,
         "sorry_count": len(sorry_findings),
         "symbols": _scan_lean_declarations(target, lean_root=project.lean_root),
@@ -935,6 +960,8 @@ def local_lean_proof_context(
             line=int(line),
             column=int(column),
             cwd=project.root,
+            include_diagnostics=include_diagnostics,
+            timeout_seconds=timeout_seconds,
         )
         payload["hover"] = local_lean_lsp_hover(
             path=target,

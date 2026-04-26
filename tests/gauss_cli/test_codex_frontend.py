@@ -92,7 +92,7 @@ def test_prepare_codex_frontend_injects_problem_solving_methodology(monkeypatch,
     assert "Problem-solving methodology module detected" in instructions
 
 
-def test_prepare_codex_frontend_stages_lean4_skill_and_lsp_mcp(monkeypatch, tmp_path):
+def test_prepare_codex_frontend_stages_lean4_skill_without_external_lsp_mcp_by_default(monkeypatch, tmp_path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     codex_bin = bin_dir / "codex"
@@ -110,7 +110,6 @@ def test_prepare_codex_frontend_stages_lean4_skill_and_lsp_mcp(monkeypatch, tmp_
         env={
             "PATH": str(bin_dir),
             "GAUSS_LEAN4_SKILLS_PATH": str(skill_source),
-            "GAUSS_LEAN_LSP_MCP_SPEC": "lean-lsp-mcp-test",
         },
         cwd=main_mod.PROJECT_ROOT,
     )
@@ -119,12 +118,37 @@ def test_prepare_codex_frontend_stages_lean4_skill_and_lsp_mcp(monkeypatch, tmp_
     assert (plan.lean4_skill_path / "SKILL.md").read_text(encoding="utf-8") == "# Lean4 Skill\n"
     assert (plan.lean4_skill_path / "references" / "proof.md").is_file()
     config_text = plan.config_path.read_text(encoding="utf-8")
+    assert "[mcp_servers.lean-lsp]" not in config_text
+    instructions = plan.instructions_path.read_text(encoding="utf-8")
+    assert "Lean4 skill path" in instructions
+    assert "upstream Lean LSP goal-state behavior" not in instructions
+
+
+def test_prepare_codex_frontend_can_opt_into_external_lsp_mcp(monkeypatch, tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    codex_bin = bin_dir / "codex"
+    codex_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+    codex_bin.chmod(0o755)
+    uvx_bin = bin_dir / "uvx"
+    uvx_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+    uvx_bin.chmod(0o755)
+
+    plan = codex_frontend.prepare_codex_frontend(
+        env={
+            "PATH": str(bin_dir),
+            "GAUSS_ENABLE_EXTERNAL_LEAN_LSP_MCP": "1",
+            "GAUSS_LEAN_LSP_MCP_SPEC": "lean-lsp-mcp-test",
+        },
+        cwd=main_mod.PROJECT_ROOT,
+    )
+
+    config_text = plan.config_path.read_text(encoding="utf-8")
     assert "[mcp_servers.lean-lsp]" in config_text
     assert str(uvx_bin) in config_text
     assert "lean-lsp-mcp-test" in config_text
     assert "LEAN_PROJECT_PATH" in config_text
     instructions = plan.instructions_path.read_text(encoding="utf-8")
-    assert "Lean4 skill path" in instructions
     assert "upstream Lean LSP goal-state behavior" in instructions
 
 

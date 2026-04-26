@@ -16,6 +16,7 @@ from gauss_cli.lean_service import (
     LeanProofServiceUnavailableError,
     local_lean_lsp_definition,
     local_lean_lsp_diagnostics,
+    local_lean_lsp_goals,
     local_lean_lsp_symbols,
     local_lean_proof_context,
     local_lean_lsp_references,
@@ -175,6 +176,26 @@ def test_native_lsp_diagnostics_parse_controlled_lean_check(monkeypatch, tmp_pat
     assert diagnostics["diagnostics"][0]["line"] == 2
     assert diagnostics["diagnostics"][0]["severity"] == "error"
     assert "unsolved goals" in diagnostics["diagnostics"][0]["message"]
+
+
+def test_native_lsp_goals_avoids_expensive_diagnostics_by_default(monkeypatch, tmp_path):
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    (project_root / "lakefile.toml").write_text('name = "demo"\n', encoding="utf-8")
+    initialize_gauss_project(project_root, name="Demo")
+    lean_file = project_root / "Demo.lean"
+    lean_file.write_text("theorem target : True := by\n  trivial\n", encoding="utf-8")
+
+    def fail_diagnostics(**kwargs):
+        raise AssertionError("diagnostics should not run for lightweight goals")
+
+    monkeypatch.setattr("gauss_cli.lean_service.local_lean_lsp_diagnostics", fail_diagnostics)
+
+    goals = local_lean_lsp_goals(path="Demo.lean", line=2, column=3, cwd=project_root)
+
+    assert goals["diagnostics_included"] is False
+    assert goals["diagnostics"] == []
+    assert goals["source_window"]
 
 
 def test_native_proof_context_combines_imports_sorries_and_cursor_context(monkeypatch, tmp_path):

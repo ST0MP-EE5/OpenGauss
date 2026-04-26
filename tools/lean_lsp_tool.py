@@ -35,21 +35,36 @@ def _error_payload(operation: str, exc: Exception) -> str:
     )
 
 
-def _diagnostics_tool(*, path: str, cwd: str | None = None, timeout_seconds: int = 30 * 60) -> str:
+def _diagnostics_tool(*, path: str, cwd: str | None = None, timeout_seconds: int = 60) -> str:
     try:
         payload = local_lean_lsp_diagnostics(
             path=path,
             cwd=cwd,
-            timeout_seconds=int(timeout_seconds or 30 * 60),
+            timeout_seconds=int(timeout_seconds or 60),
         )
     except Exception as exc:
         return _error_payload("lean_lsp_diagnostics", exc)
     return _json_payload({"operation": "lean_lsp_diagnostics", **payload})
 
 
-def _goals_tool(*, path: str, line: int, column: int, cwd: str | None = None) -> str:
+def _goals_tool(
+    *,
+    path: str,
+    line: int,
+    column: int,
+    cwd: str | None = None,
+    include_diagnostics: bool = False,
+    timeout_seconds: int = 60,
+) -> str:
     try:
-        payload = local_lean_lsp_goals(path=path, line=int(line), column=int(column), cwd=cwd)
+        payload = local_lean_lsp_goals(
+            path=path,
+            line=int(line),
+            column=int(column),
+            cwd=cwd,
+            include_diagnostics=bool(include_diagnostics),
+            timeout_seconds=int(timeout_seconds or 60),
+        )
     except Exception as exc:
         return _error_payload("lean_lsp_goals", exc)
     return _json_payload({"success": True, "operation": "lean_lsp_goals", **payload})
@@ -104,9 +119,18 @@ def _proof_context_tool(
     cwd: str | None = None,
     line: int | None = None,
     column: int | None = None,
+    include_diagnostics: bool = False,
+    timeout_seconds: int = 60,
 ) -> str:
     try:
-        payload = local_lean_proof_context(path=path, cwd=cwd, line=line, column=column)
+        payload = local_lean_proof_context(
+            path=path,
+            cwd=cwd,
+            line=line,
+            column=column,
+            include_diagnostics=bool(include_diagnostics),
+            timeout_seconds=int(timeout_seconds or 60),
+        )
     except Exception as exc:
         return _error_payload("lean_proof_context", exc)
     return _json_payload({"success": True, "operation": "lean_proof_context", **payload})
@@ -131,7 +155,7 @@ LEAN_LSP_DIAGNOSTICS_SCHEMA = {
         "properties": {
             "path": _PATH_PROPERTY,
             "cwd": _CWD_PROPERTY,
-            "timeout_seconds": {"type": "integer", "description": "Check timeout in seconds. Defaults to 1800."},
+            "timeout_seconds": {"type": "integer", "description": "Check timeout in seconds. Defaults to 60."},
         },
         "required": ["path"],
         "additionalProperties": False,
@@ -140,10 +164,23 @@ LEAN_LSP_DIAGNOSTICS_SCHEMA = {
 
 LEAN_LSP_GOALS_SCHEMA = {
     "name": "lean_lsp_goals",
-    "description": "Return local proof-state context near a Lean cursor position without calling lean-lsp-mcp.",
+    "description": "Return lightweight local proof-state context near a Lean cursor position without calling lean-lsp-mcp.",
     "parameters": {
         "type": "object",
-        "properties": {"path": _PATH_PROPERTY, "line": _LINE_PROPERTY, "column": _COLUMN_PROPERTY, "cwd": _CWD_PROPERTY},
+        "properties": {
+            "path": _PATH_PROPERTY,
+            "line": _LINE_PROPERTY,
+            "column": _COLUMN_PROPERTY,
+            "cwd": _CWD_PROPERTY,
+            "include_diagnostics": {
+                "type": "boolean",
+                "description": "Run a Lean check and include nearby diagnostics. Defaults to false to avoid LSP timeouts.",
+            },
+            "timeout_seconds": {
+                "type": "integer",
+                "description": "Diagnostics timeout when include_diagnostics is true. Defaults to 60.",
+            },
+        },
         "required": ["path", "line", "column"],
         "additionalProperties": False,
     },
@@ -206,7 +243,7 @@ LEAN_LSP_SYMBOLS_SCHEMA = {
 
 LEAN_PROOF_CONTEXT_SCHEMA = {
     "name": "lean_proof_context",
-    "description": "Return combined imports, declarations, diagnostics, sorries, and optional cursor context for a Lean file.",
+    "description": "Return combined imports, declarations, sorries, and optional cursor context for a Lean file.",
     "parameters": {
         "type": "object",
         "properties": {
@@ -214,6 +251,14 @@ LEAN_PROOF_CONTEXT_SCHEMA = {
             "cwd": _CWD_PROPERTY,
             "line": _LINE_PROPERTY,
             "column": _COLUMN_PROPERTY,
+            "include_diagnostics": {
+                "type": "boolean",
+                "description": "Run a Lean check and include diagnostics. Defaults to false to keep context responsive.",
+            },
+            "timeout_seconds": {
+                "type": "integer",
+                "description": "Diagnostics timeout when include_diagnostics is true. Defaults to 60.",
+            },
         },
         "required": ["path"],
         "additionalProperties": False,
@@ -228,7 +273,7 @@ registry.register(
     handler=lambda args, **kw: _diagnostics_tool(
         path=args.get("path", ""),
         cwd=args.get("cwd"),
-        timeout_seconds=args.get("timeout_seconds") or 30 * 60,
+        timeout_seconds=args.get("timeout_seconds") or 60,
     ),
 )
 registry.register(
@@ -240,6 +285,8 @@ registry.register(
         line=args.get("line") or 1,
         column=args.get("column") or 1,
         cwd=args.get("cwd"),
+        include_diagnostics=args.get("include_diagnostics") or False,
+        timeout_seconds=args.get("timeout_seconds") or 60,
     ),
 )
 registry.register(
@@ -296,5 +343,7 @@ registry.register(
         cwd=args.get("cwd"),
         line=args.get("line"),
         column=args.get("column"),
+        include_diagnostics=args.get("include_diagnostics") or False,
+        timeout_seconds=args.get("timeout_seconds") or 60,
     ),
 )
