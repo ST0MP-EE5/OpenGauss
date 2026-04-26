@@ -75,6 +75,40 @@ Codex profile generation and native Lean workflow prompts should detect these mo
 
 Use `gauss_problem_solving_methodology` for explicit tool access. Keep methodology content concise, source-grounded, and applicable across algebra, analysis, topology, logic, combinatorics, geometry, and other mathematical topics.
 
+## Gauss Project Learning Workflow
+
+These instructions apply to any Gauss/OpenGauss Lean project in this repository,
+regardless of topic. Project-local `AGENTS.md` files may add subject-specific
+source paths or conventions, but should not duplicate this workflow.
+
+When the user is using a project to learn Lean 4 or study a mathematical topic,
+preserve durable teaching context in Lean source files, not separate Markdown
+progress trackers.
+
+For learning-oriented project work:
+
+1. Record source context in nearby Lean comments/docstrings when a theorem,
+   exercise, definition, or example comes from local source material.
+2. Keep explanations aligned with the OpenGauss methodology:
+   understand -> devise_plan -> carry_out -> look_back.
+3. For theorem-by-theorem teaching, prefer pedagogical notes inline in the
+   relevant `.lean` file as comments/docstrings near the theorem being studied.
+4. Explain both proof ideas and Lean syntax directly in place when useful:
+   `:`, `:=`, `by`, `{}` vs `()`, `->`, `forall`, `exists`, `and`, `or`,
+   subset notation, `funext`, `ext`, tuple/constructor notation such as
+   `⟨_, _⟩`, and field access such as `.1`/`.2`.
+5. Keep chat responses short summaries of what changed; durable explanations
+   should live next to the proof, definition, or example.
+6. For learning-oriented Lean files, add nearby reusable mini-lemmas,
+   counterexamples to tempting false statements, and toy models/special cases
+   when they clarify the concept.
+7. Use `gauss_problem_probe` modes such as `toy_models`,
+   `counterexample_probe`, `hypothesis_audit`, `parameter_plan`,
+   `proof_strategy`, `attempt_review`, and `look_back` when choosing the next
+   teaching/proof move.
+8. Do not create Markdown progress trackers for learning workflows unless the
+   user asks for them explicitly.
+
 ## Adding Tools
 
 1. Create `tools/your_tool.py` and register handlers through `tools.registry`.

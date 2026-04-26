@@ -1,32 +1,20 @@
-# FoM Project Agent Guide
+# FoM Project Guide
 
 Instructions for AI coding assistants working inside the FoM Lean project.
 
-## Learning Workflow
+The generalized Gauss project learning workflow is defined in the repository
+root `AGENTS.md` and applies here. This file only adds FoM-specific source
+context.
 
-When the user is using this project to learn Lean 4 or study Foundations of
-Mathematics topics, preserve durable teaching context in Lean source files, not
-Markdown tracker files.
+## Source Context
 
-For this workflow:
+When a theorem, exercise, definition, or explanation comes from FoM source
+material, record the relevant source path in nearby Lean comments/docstrings.
+Common sources:
 
-1. Record source context in nearby Lean comments/docstrings when a theorem or
-   exercise comes from local material, especially:
-   - `Sources/FoundationsOfMathematics/exam3_topics.pdf`
-   - `Sources/FoundationsOfMathematics/Book Of Proofs.pdf`
-2. Keep explanations aligned with the OpenGauss methodology:
-   understand -> devise_plan -> carry_out -> look_back.
-3. For theorem-by-theorem teaching, prefer pedagogical notes inline in the
-   relevant `.lean` file as comments/docstrings near the theorem being studied.
-4. Explain both proof ideas and Lean syntax directly in place when useful:
-   `:`, `:=`, `by`, `{}` vs `()`, `->`, `forall`, `exists`, `and`, `or`,
-   subset notation, `funext`, `ext`, tuple/constructor notation such as
-   `⟨_, _⟩`, and field access such as `.1`/`.2`.
-5. Keep chat responses short summaries of what changed; durable explanations
-   should live next to the proof.
-6. For learning-oriented Lean files, add nearby reusable mini-lemmas,
-   counterexamples to tempting false statements, and toy models/special cases
-   when they clarify the concept.
+- `Sources/FoundationsOfMathematics/exam3_topics.pdf`
+- `Sources/FoundationsOfMathematics/Book Of Proofs.pdf`
 
-Do not create Markdown progress trackers for this workflow unless the user asks
-for them explicitly.
+FoM learning files should remain topic-focused Lean files with inline pedagogy,
+toy models, counterexamples, and reusable mini-lemmas where they clarify the
+mathematical concept.
