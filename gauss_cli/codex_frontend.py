@@ -376,11 +376,13 @@ def prepare_codex_frontend(
     argv.extend(str(arg) for arg in (extra_args or ()))
 
     child_env = dict(base_env)
+    methodology_enabled = "1" if project_has_methodology(project.root, project.lean_root) else "0"
     child_env.update(
         {
             "CODEX_HOME": str(codex_home),
             "GAUSS_ACTIVE_PROJECT": str(project.root),
             "GAUSS_LEAN_ROOT": str(project.lean_root),
+            "GAUSS_PROBLEM_SOLVING_METHODOLOGY": methodology_enabled,
             "TERMINAL_CWD": str(project.root),
             "GAUSS_CODEX_FRONTEND": "1",
         }
@@ -417,6 +419,13 @@ def launch_codex_frontend(
         query=query,
         extra_args=extra_args,
     )
+    if query is None:
+        print(f"OpenGauss project: {plan.project.label} ({plan.project.root})")
+        print(f"Codex model: {plan.model} · reasoning: {plan.reasoning_effort}")
+        print("OpenGauss MCP server: opengauss")
+        print("Methodology tool: opengauss/gauss_problem_solving_methodology")
+        print("Lean tools: opengauss/gauss_lean_project_status, opengauss/gauss_lean_check_file, opengauss/gauss_lean_lake_build")
+        print()
     return subprocess.run(
         list(plan.argv),
         cwd=plan.project.root,

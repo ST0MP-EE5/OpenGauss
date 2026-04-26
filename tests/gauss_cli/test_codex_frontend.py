@@ -84,6 +84,7 @@ def test_prepare_codex_frontend_injects_problem_solving_methodology(monkeypatch,
     config_text = plan.config_path.read_text(encoding="utf-8")
     instructions = plan.instructions_path.read_text(encoding="utf-8")
     assert 'GAUSS_PROBLEM_SOLVING_METHODOLOGY = "1"' in config_text
+    assert plan.child_env["GAUSS_PROBLEM_SOLVING_METHODOLOGY"] == "1"
     assert "gauss_problem_solving_methodology" in instructions
     assert "Problem-solving methodology module detected" in instructions
 
@@ -206,6 +207,26 @@ def test_launch_codex_frontend_invokes_codex(monkeypatch, tmp_path):
     assert captured["argv"][1] == "--dangerously-bypass-approvals-and-sandbox"
     assert captured["cwd"] == main_mod.PROJECT_ROOT / "Lean4"
     assert captured["env"]["GAUSS_ACTIVE_PROJECT"].endswith("/Lean4")
+    assert captured["env"]["GAUSS_PROBLEM_SOLVING_METHODOLOGY"] == "1"
+
+
+def test_launch_codex_frontend_prints_visible_opengauss_tools(monkeypatch, tmp_path, capsys):
+    codex_bin = tmp_path / "codex"
+    codex_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+    codex_bin.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+
+    def fake_run(argv, *, cwd, env, check):
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(codex_frontend.subprocess, "run", fake_run)
+
+    assert codex_frontend.launch_codex_frontend(cwd=main_mod.PROJECT_ROOT) == 0
+
+    out = capsys.readouterr().out
+    assert "OpenGauss MCP server: opengauss" in out
+    assert "Methodology tool: opengauss/gauss_problem_solving_methodology" in out
+    assert "opengauss/gauss_lean_project_status" in out
 
 
 def test_legacy_lean4_launcher_subcommand_is_removed(monkeypatch):
